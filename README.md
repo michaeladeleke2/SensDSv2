@@ -60,6 +60,6 @@ SensDSv2/
 - Key discovery: in SDK 3.6.4, chirp parameters must be set on `cfg.chirp.*` not directly on the config object
 - Valid config requires `rx_mask=7` (all 3 RX antennas enabled) even though we only use antenna 0 for processing
 - Each frame returns shape `(3, 64, 64)`: 3 RX antennas × 64 chirps × 64 samples (complex64)
-- Verified working on macOS (arm64)
+- Verified working on macOS (arm64) and Windows (x86_64)
 
 ---
