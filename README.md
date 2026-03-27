@@ -65,6 +65,14 @@ SensDSv2/
 - Output: `(512, 17)` per frame — frequency bins × time steps
 - `max` is always 0 dB by design; watch `min` to detect motion activity
 
+### Step 4 — ui/spectrogram_widget.py
+- Uses pyqtgraph ImageItem with rolling buffer for live scrolling display
+- Jet colormap manually defined to match v1 exactly
+- Key parameters: NOVERLAP=248, DB_MIN=-20, BUFFER_WIDTH=400, gaussian_filter sigma=[2.0, 1.5]
+- Must accumulate 10 frames in SpectrogramProcessor before first output (deque buffer)
+- RadarBridge uses pyqtSignal to safely pass data from radar thread to GUI thread
+- update_frame accepts full spectrogram batch and renders once per batch for efficiency
+
 ---
 ## Concepts Reference
 

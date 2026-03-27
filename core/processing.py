@@ -1,42 +1,67 @@
 import numpy as np
 from scipy.signal import butter, lfilter
-from scipy.signal import stft as scipy_stft
+from collections import deque
 
 
-NUM_CHIRPS = 64
-NUM_SAMPLES = 64
-RANGE_BINS = slice(NUM_SAMPLES // 2, NUM_SAMPLES - 1)
-NFFT = 512
-WINDOW_SIZE = 32
-NOVERLAP = 28
+NFFT = 1024
+WINDOW = 256
+NOVERLAP = 248
+SHIFT = WINDOW - NOVERLAP
+FREQ_BINS = NFFT
+DB_MIN = -60
+DB_MAX = 0
+BUFFER_FRAMES = 10
 
 
-def range_fft(chirp_data):
-    n = chirp_data.shape[0]
-    fft_out = np.fft.fft(chirp_data, n=2 * n, axis=0)
-    fft_out = fft_out[n:] / n
-    fft_out -= np.mean(fft_out, axis=1, keepdims=True)
-    return fft_out
+def _stft(signal, window, nfft, shift):
+    n = (len(signal) - window - 1) // shift
+    out = np.zeros((nfft, n), dtype=complex)
+    for i in range(n):
+        segment = signal[i * shift: i * shift + window]
+        windowed = segment * np.hanning(window)
+        out[:, i] = np.fft.fft(windowed, n=nfft)
+    return out
 
 
-def mti_filter(range_profile):
-    b, a = butter(1, 0.01, btype='high')
+def _mti_filter(range_profile):
+    b, a = butter(1, 0.01, 'high', output='ba')
     filtered = np.zeros_like(range_profile)
-    for i in range(range_profile.shape[0]):
-        filtered[i, :] = lfilter(b, a, range_profile[i, :])
+    for r in range(filtered.shape[0]):
+        filtered[r, :] = lfilter(b, a, range_profile[r, :])
     return filtered
 
 
-def compute_spectrogram(frame):
-    data = frame[0]
-    data = data.T
-    rng = range_fft(data)
-    rng = mti_filter(rng)
-    signal = np.sum(rng[RANGE_BINS, :], axis=0)
-    _, _, Zxx = scipy_stft(signal, nperseg=WINDOW_SIZE, noverlap=NOVERLAP, nfft=NFFT)
-    magnitude = np.abs(np.fft.fftshift(Zxx, axes=0))
-    max_val = np.max(magnitude)
-    if max_val == 0:
-        max_val = 1.0
-    spectrogram_db = 20 * np.log10(magnitude / max_val + 1e-6)
-    return spectrogram_db
+class SpectrogramProcessor:
+    def __init__(self, num_samples=64, num_chirps=64, buffer_frames=BUFFER_FRAMES):
+        self._num_samples = num_samples
+        self._num_chirps = num_chirps
+        self._buffer = deque(maxlen=buffer_frames)
+
+    def push_frame(self, frame):
+        self._buffer.append(frame[0].copy())
+        if len(self._buffer) < self._buffer.maxlen:
+            return None
+        return self._compute()
+
+    def _compute(self):
+        frames = np.array(self._buffer)
+        data = np.transpose(frames, (2, 1, 0))
+        num_samples = data.shape[0]
+        num_chirps = data.shape[1] * data.shape[2]
+        data = data.reshape((num_samples, num_chirps), order='F')
+
+        range_fft = np.fft.fft(data, 2 * num_samples, axis=0)[num_samples:] / num_samples
+        range_fft -= np.expand_dims(np.mean(range_fft, 1), 1)
+
+        rng = _mti_filter(range_fft)
+
+        rBin = np.arange(num_samples // 2, num_samples - 1)
+        vec = np.sum(rng[rBin, :], axis=0)
+
+        spect = _stft(vec, WINDOW, NFFT, SHIFT)
+        spect = np.abs(np.fft.fftshift(spect, axes=0))
+
+        maxval = np.max(spect) if np.max(spect) != 0 else 1.0
+        spect_db = 20 * np.log10(spect / maxval + 1e-6)
+
+        return spect_db
