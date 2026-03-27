@@ -49,52 +49,43 @@ SensDSv2/
 ## Build Log
 
 ### Step 1 — Project structure and environment
-- Created folder layout and `requirements.txt`
-- Set up conda environment with Python 3.11
-- Key packages: PyQt6, pyqtgraph, numpy, scipy
-- Infineon SDK (`ifxradarsdk`) must be installed from a local `.whl` — it is not on PyPI
-- `.whl` files are platform-specific and excluded from the repo
+- `ifxradarsdk` is not on PyPI — install from local `.whl` (platform-specific, excluded from repo)
+- Conda env: Python 3.11, packages in `requirements.txt`
 
 ### Step 2 — core/radar.py
-- Implemented `RadarStream` class with background threading
-- Key discovery: in SDK 3.6.4, chirp parameters must be set on `cfg.chirp.*` not directly on the config object
-- Valid config requires `rx_mask=7` (all 3 RX antennas enabled) even though we only use antenna 0 for processing
-- Each frame returns shape `(3, 64, 64)`: 3 RX antennas × 64 chirps × 64 samples (complex64)
-- Verified working on macOS (arm64) and Windows (x86_64)
+- Chirp parameters must be set on `cfg.chirp.*` not directly on the config object (SDK 3.6.4)
+- `rx_mask=7` required even though we only use antenna 0
+- Frame shape: `(3, 64, 64)` — antennas × chirps × samples (complex64)
+- Verified on macOS (arm64) and Windows (x86_64)
+
+### Step 3 — core/processing.py
+- Pipeline: Range FFT → MTI filter → range bin sum → STFT → dB scale
+- Transpose frame to `(samples, chirps)` before Range FFT
+- Use `return_onesided=False` — signal is complex, we need both positive and negative Doppler
+- Output: `(512, 17)` per frame — frequency bins × time steps
+- `max` is always 0 dB by design; watch `min` to detect motion activity
 
 ---
-
 ## Concepts Reference
 
-### How the spectrogram pipeline works
+### Doppler shift
+Moving targets shift the reflected signal frequency. Toward the radar = higher frequency, away = lower. This is what makes gestures distinguishable.
 
-Raw radar data flows through these steps before it becomes a visible spectrogram:
-```
-raw frame (3, 64, 64) complex
-        ↓
-  take antenna 0 → (64, 64)
-        ↓
-  Range FFT — find which distances have signal
-        ↓
-  MTI filter — remove static objects (walls, furniture)
-        ↓
-  sum across range bins — collapse to 1D signal over time
-        ↓
-  STFT — sliding window FFT to get frequency vs time
-        ↓
-  dB scale — compress dynamic range so it's readable
-        ↓
-  2D spectrogram array ready for display
-```
+### Frame structure (3, 64, 64)
+3 RX antennas × 64 chirps × 64 samples. Chirps = time resolution, samples = range resolution. We use antenna 0 only.
 
-**The key insight:** Doppler shift = velocity. When your hand moves toward 
-the radar, the reflected signal shifts to a higher frequency. When it moves 
-away, it shifts lower. The spectrogram shows that frequency shift over time, 
-which is why a swipe left looks visually different from a push forward — the 
-velocity profile over time is different for each gesture.
+### Range FFT
+Converts each chirp from time domain to distance domain. Each output bin = a specific distance from the sensor.
 
-**Frame shape breakdown:**
-- `3` = 3 RX antennas (we use antenna 0 only)
-- `64` = chirps per frame (time axis resolution)
-- `64` = samples per chirp (range axis resolution)
+### MTI filter
+High-pass filter that removes static objects (walls, furniture). Only moving targets pass through.
+
+### Range bin summation
+Collapses the 2D range-time matrix to a 1D signal by summing across the distance bins where gestures occur.
+
+### STFT
+Sliding window FFT across the 1D signal. Output is frequency vs time — the spectrogram. X-axis = time, Y-axis = Doppler velocity.
+
+### dB scale
+Compresses signal dynamic range so the display is readable. Max signal = 0 dB, everything else is how far below that ceiling it falls.
 ---
