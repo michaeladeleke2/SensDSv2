@@ -10,7 +10,7 @@ A radar-based gesture recognition and ML education tool built on the Infineon BG
 - Python 3.11
 - Miniforge or Anaconda
 - Infineon BGT60TR13C radar sensor
-- Platform-specific Infineon SDK `.whl` (not included in repo — see below)
+- Platform-specific Infineon SDK `.whl` (not included in repo)
 
 ### Install
 ```bash
@@ -20,10 +20,10 @@ pip install -r requirements.txt
 pip install <platform-specific-ifxradarsdk>.whl
 ```
 
-**Mac:** `ifxradarsdk-3_6_4_4b4a6245-py3-none-macosx_10_14_universal2.whl`  
+**Mac:** `ifxradarsdk-3_6_4_4b4a6245-py3-none-macosx_10_14_universal2.whl`
 **Windows:** `ifxradarsdk-3_6_4_4b4a6245-py3-none-win_amd64.whl`
 
-### Verify install
+### Verify
 ```bash
 python -c "import PyQt6; import pyqtgraph; import ifxradarsdk; print('all good')"
 ```
@@ -35,10 +35,9 @@ python -c "import PyQt6; import pyqtgraph; import ifxradarsdk; print('all good')
 SensDSv2/
 ├── main.py                      # Entry point
 ├── requirements.txt             # Pip dependencies
-├── README.md                    # This file
 ├── core/
 │   ├── radar.py                 # Radar connection and streaming
-│   └── processing.py            # Signal processing (MTI, STFT, spectrogram)
+│   └── processing.py            # Signal processing pipeline
 └── ui/
     ├── main_window.py           # Main application window
     └── spectrogram_widget.py    # Live spectrogram display
@@ -49,31 +48,30 @@ SensDSv2/
 ## Build Log
 
 ### Step 1 — Project structure and environment
-- `ifxradarsdk` is not on PyPI — install from local `.whl` (platform-specific, excluded from repo)
-- Conda env: Python 3.11, packages in `requirements.txt`
+- `ifxradarsdk` not on PyPI — install from local `.whl`, platform-specific, excluded from repo
+- Conda env: Python 3.11, dependencies in `requirements.txt`
 
 ### Step 2 — core/radar.py
-- Chirp parameters must be set on `cfg.chirp.*` not directly on the config object (SDK 3.6.4)
-- `rx_mask=7` required even though we only use antenna 0
+- Chirp parameters must be set on `cfg.chirp.*`, not on the config object directly (SDK 3.6.4)
+- `rx_mask=7` required to enable all 3 RX antennas even though only antenna 0 is used
 - Frame shape: `(3, 64, 64)` — antennas × chirps × samples (complex64)
 - Verified on macOS (arm64) and Windows (x86_64)
 
 ### Step 3 — core/processing.py
 - Pipeline: Range FFT → MTI filter → range bin sum → STFT → dB scale
-- Transpose frame to `(samples, chirps)` before Range FFT
-- Use `return_onesided=False` — signal is complex, we need both positive and negative Doppler
-- Output: `(512, 17)` per frame — frequency bins × time steps
-- `max` is always 0 dB by design; watch `min` to detect motion activity
+- Accumulates 10 frames in a deque before first output — single frame has too few chirps for a clean STFT
+- `WINDOW=256, NOVERLAP=248, NFFT=1024` — matched to v1 parameters
+- Signal is complex so STFT must use both positive and negative Doppler bins
 
 ### Step 4 — ui/spectrogram_widget.py
-- Uses pyqtgraph ImageItem with rolling buffer for live scrolling display
-- Jet colormap manually defined to match v1 exactly
-- Key parameters: NOVERLAP=248, DB_MIN=-20, BUFFER_WIDTH=400, gaussian_filter sigma=[2.0, 1.5]
-- Must accumulate 10 frames in SpectrogramProcessor before first output (deque buffer)
-- RadarBridge uses pyqtSignal to safely pass data from radar thread to GUI thread
-- update_frame accepts full spectrogram batch and renders once per batch for efficiency
+- pyqtgraph ImageItem with rolling buffer for live scrolling display
+- Jet colormap manually defined to match v1
+- `DB_MIN=-20` clips noise floor so gestures stand out
+- `gaussian_filter(sigma=[2.0, 1.5])` smooths across frequency and time axes
+- RadarBridge uses `pyqtSignal` to safely pass data from radar thread to GUI thread
 
 ---
+
 ## Concepts Reference
 
 ### Doppler shift
@@ -96,4 +94,3 @@ Sliding window FFT across the 1D signal. Output is frequency vs time — the spe
 
 ### dB scale
 Compresses signal dynamic range so the display is readable. Max signal = 0 dB, everything else is how far below that ceiling it falls.
----
