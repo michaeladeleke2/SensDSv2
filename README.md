@@ -63,3 +63,38 @@ SensDSv2/
 - Verified working on macOS (arm64) and Windows (x86_64)
 
 ---
+
+## Concepts Reference
+
+### How the spectrogram pipeline works
+
+Raw radar data flows through these steps before it becomes a visible spectrogram:
+```
+raw frame (3, 64, 64) complex
+        ↓
+  take antenna 0 → (64, 64)
+        ↓
+  Range FFT — find which distances have signal
+        ↓
+  MTI filter — remove static objects (walls, furniture)
+        ↓
+  sum across range bins — collapse to 1D signal over time
+        ↓
+  STFT — sliding window FFT to get frequency vs time
+        ↓
+  dB scale — compress dynamic range so it's readable
+        ↓
+  2D spectrogram array ready for display
+```
+
+**The key insight:** Doppler shift = velocity. When your hand moves toward 
+the radar, the reflected signal shifts to a higher frequency. When it moves 
+away, it shifts lower. The spectrogram shows that frequency shift over time, 
+which is why a swipe left looks visually different from a push forward — the 
+velocity profile over time is different for each gesture.
+
+**Frame shape breakdown:**
+- `3` = 3 RX antennas (we use antenna 0 only)
+- `64` = chirps per frame (time axis resolution)
+- `64` = samples per chirp (range axis resolution)
+---
