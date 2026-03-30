@@ -5,9 +5,15 @@ from scipy.ndimage import gaussian_filter
 
 
 DISPLAY_SECONDS = 5
-FRAMES_PER_SECOND = 80
-BUFFER_WIDTH = DISPLAY_SECONDS * FRAMES_PER_SECOND
 FREQ_BINS = 1024
+
+# Radar / STFT parameters — must match core/processing.py and core/radar.py
+FRAME_TIME_S = 0.15   # cfg.frame_repetition_time_s
+_CHIRPS_PER_FRAME = 64
+_STFT_SHIFT = 8       # SHIFT = WINDOW - NOVERLAP in processing.py
+# Spectrogram columns produced per second of live radar data
+COLS_PER_SECOND = int(round(_CHIRPS_PER_FRAME / (FRAME_TIME_S * _STFT_SHIFT)))
+BUFFER_WIDTH = DISPLAY_SECONDS * COLS_PER_SECOND  # ~265 columns for 5 s
 DB_MIN = -20
 DB_MAX = 0
 

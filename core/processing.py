@@ -32,9 +32,11 @@ def _mti_filter(range_profile):
 
 
 class SpectrogramProcessor:
-    def __init__(self, num_samples=64, num_chirps=64, buffer_frames=BUFFER_FRAMES):
+    def __init__(self, num_samples=64, num_chirps=64, buffer_frames=BUFFER_FRAMES,
+                 streaming=False):
         self._num_samples = num_samples
         self._num_chirps = num_chirps
+        self._streaming = streaming
         self._buffer = deque(maxlen=buffer_frames)
 
     def push_frame(self, frame):
@@ -64,4 +66,9 @@ class SpectrogramProcessor:
         maxval = np.max(spect) if np.max(spect) != 0 else 1.0
         spect_db = 20 * np.log10(spect / maxval + 1e-6)
 
+        if self._streaming:
+            # Only emit the newly computed columns (one frame's worth) so the
+            # rolling display buffer advances correctly without duplicating data.
+            cols_per_frame = max(1, self._num_chirps // SHIFT)
+            return spect_db[:, -cols_per_frame:]
         return spect_db

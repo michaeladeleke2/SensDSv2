@@ -4,7 +4,9 @@ import numpy as np
 from PyQt6 import QtWidgets, QtCore, QtGui
 from scipy.ndimage import gaussian_filter
 from core.processing import SpectrogramProcessor
-from ui.spectrogram_widget import DB_MIN, DB_MAX, make_jet_colormap
+from ui.spectrogram_widget import (
+    DB_MIN, DB_MAX, FREQ_BINS, MAX_VELOCITY, FRAME_TIME_S, make_jet_colormap,
+)
 import pyqtgraph as pg
 
 
@@ -124,7 +126,9 @@ COLLECT_STYLE = """
 class CaptureWorker(QtCore.QObject):
     countdown = QtCore.pyqtSignal(int)
     capturing = QtCore.pyqtSignal()
-    sample_done = QtCore.pyqtSignal(np.ndarray)
+    # emits (spectrogram_array, n_frames_used) so the preview can compute
+    # the correct time axis from the actual number of captured frames.
+    sample_done = QtCore.pyqtSignal(np.ndarray, int)
     batch_done = QtCore.pyqtSignal()
     stopped = QtCore.pyqtSignal()
 
@@ -163,13 +167,15 @@ class CaptureWorker(QtCore.QObject):
             self._collecting = False
 
             if self._frames:
-                n = min(len(self._frames), 10)
+                # Use ALL captured frames (not a fixed 10) so the spectrogram
+                # covers the full gesture window and has a reasonable aspect ratio.
+                n = len(self._frames)
                 proc = SpectrogramProcessor(buffer_frames=n)
                 result = None
-                for f in self._frames[-n:]:
+                for f in self._frames:
                     result = proc.push_frame(f)
                 if result is not None:
-                    self.sample_done.emit(result)
+                    self.sample_done.emit(result, n)
 
         self.batch_done.emit()
 
@@ -313,15 +319,39 @@ class CollectTab(QtWidgets.QWidget):
         preview_heading.setObjectName("preview_heading")
         layout.addWidget(preview_heading)
 
-        self._preview_img = pg.ImageView()
-        self._preview_img.ui.roiBtn.hide()
-        self._preview_img.ui.menuBtn.hide()
-        self._preview_img.ui.histogram.hide()
-        self._preview_img.setStyleSheet("background-color: #1a1a2e;")
+        # Use a proper plot widget (same approach as SpectrogramWidget) so the
+        # preview has calibrated velocity/time axes and matches the live display.
+        self._preview_widget = pg.GraphicsLayoutWidget()
+        self._preview_widget.setBackground('#00008F')
+
+        self._preview_plot = self._preview_widget.addPlot()
+        self._preview_plot.setLabel('left', 'Velocity', units='m/s')
+        self._preview_plot.setLabel('bottom', 'Time', units='s')
+        self._preview_plot.hideButtons()
+        self._preview_plot.setMouseEnabled(x=False, y=False)
+
+        for axis_name in ('left', 'bottom'):
+            ax = self._preview_plot.getAxis(axis_name)
+            ax.setTextPen(pg.mkPen('w'))
+            ax.setPen(pg.mkPen('w'))
+
+        self._preview_img = pg.ImageItem()
+        self._preview_plot.addItem(self._preview_img)
+
         self._preview_img.setColorMap(make_jet_colormap())
-        self._preview_img.getView().setAspectLocked(False)
-        self._preview_img.getView().invertY(False)
-        layout.addWidget(self._preview_img)
+        self._preview_img.setLevels([DB_MIN, DB_MAX])
+
+        zero_line = pg.InfiniteLine(
+            pos=0, angle=0,
+            pen=pg.mkPen(color=(255, 255, 255, 60), width=1)
+        )
+        self._preview_plot.addItem(zero_line)
+
+        # Start with empty range so axes look clean before first capture.
+        self._preview_plot.setYRange(-MAX_VELOCITY, MAX_VELOCITY, padding=0)
+        self._preview_plot.setXRange(0, 3.0, padding=0)
+
+        layout.addWidget(self._preview_widget)
 
         bottom_row = QtWidgets.QHBoxLayout()
 
@@ -425,41 +455,61 @@ class CollectTab(QtWidgets.QWidget):
             "color: #c0392b; font-size: 13px; font-weight: bold;"
         )
 
-    def _on_sample_done(self, spectrogram):
+    def _on_sample_done(self, spectrogram, n_frames):
         self._samples_collected += 1
         self._progress_bar.setValue(self._samples_collected)
 
+        # --- Save raw numpy array ---
         npy_path = os.path.join(
             self._save_dir, f"sample_{self._samples_collected:03d}.npy"
         )
         np.save(npy_path, spectrogram)
 
+        # --- Smooth and clip for display / PNG save ---
         smoothed = gaussian_filter(
             spectrogram.astype(np.float64), sigma=[2.0, 1.5]
         )
         display = np.clip(smoothed, DB_MIN, DB_MAX).astype(np.float32)
-        normalized = (display - DB_MIN) / (DB_MAX - DB_MIN)
-        colored = _apply_jet_colormap(normalized)
 
+        # --- Save PNG ---
+        # spectrogram shape: (FREQ_BINS, n_cols)
+        # We want: width = n_cols (time), height = FREQ_BINS (velocity)
+        # Flip vertically so positive velocity is at the top of the image.
+        normalized = (display - DB_MIN) / (DB_MAX - DB_MIN)
+        colored = _apply_jet_colormap(normalized)           # (FREQ_BINS, n_cols, 3)
+        colored_flipped = np.ascontiguousarray(colored[::-1])  # positive vel → top
+        n_cols = colored_flipped.shape[1]
+        img_raw = QtGui.QImage(
+            colored_flipped.tobytes(),
+            n_cols,
+            FREQ_BINS,
+            n_cols * 3,
+            QtGui.QImage.Format.Format_RGB888,
+        )
+        # Scale to a consistent landscape size (400×300) for the training pipeline.
+        img_save = img_raw.scaled(
+            400, 300,
+            QtCore.Qt.AspectRatioMode.IgnoreAspectRatio,
+            QtCore.Qt.TransformationMode.SmoothTransformation,
+        )
         png_path = os.path.join(
             self._save_dir, f"sample_{self._samples_collected:03d}.png"
         )
-        img = QtGui.QImage(
-            colored.tobytes(),
-            colored.shape[1],
-            colored.shape[0],
-            colored.shape[1] * 3,
-            QtGui.QImage.Format.Format_RGB888
-        )
-        img.save(png_path)
+        img_save.save(png_path)
 
-        self._preview_img.setImage(
-            display.T,
-            autoLevels=False,
-            levels=[DB_MIN, DB_MAX],
-            autoRange=True
+        # --- Update preview plot ---
+        # Compute the actual gesture duration from the number of radar frames.
+        duration = n_frames * FRAME_TIME_S
+        n_cols_display = display.shape[1]
+        time_scale = duration / n_cols_display
+        vel_scale = (2 * MAX_VELOCITY) / FREQ_BINS
+
+        self._preview_img.setTransform(
+            QtGui.QTransform().scale(time_scale, vel_scale).translate(0, -FREQ_BINS / 2)
         )
-        self._preview_img.autoRange()
+        self._preview_img.setImage(display.T, autoLevels=False)
+        self._preview_plot.setXRange(0, duration, padding=0)
+        self._preview_plot.setYRange(-MAX_VELOCITY, MAX_VELOCITY, padding=0)
 
         self._open_folder_btn.setEnabled(True)
         self._sample_count.setText(
