@@ -22,7 +22,6 @@ class RadarBridge(QtCore.QObject):
         if result is not None:
             self.frame_ready.emit(result)
 
-
     def _on_error(self, msg):
         print(f"Radar error: {msg}")
 

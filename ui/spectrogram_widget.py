@@ -11,6 +11,10 @@ FREQ_BINS = 1024
 DB_MIN = -20
 DB_MAX = 0
 
+PRF = 1.0 / 0.0005
+WAVELENGTH = 3e8 / 61e9
+MAX_VELOCITY = (PRF * WAVELENGTH) / 4  # ±2.46 m/s
+
 
 def make_jet_colormap():
     positions = [0.0, 0.125, 0.375, 0.625, 0.875, 1.0]
@@ -56,19 +60,18 @@ class SpectrogramWidget(pg.GraphicsLayoutWidget):
         self._img.setLevels([DB_MIN, DB_MAX])
 
         time_scale = DISPLAY_SECONDS / BUFFER_WIDTH
-        freq_scale = 1.0 / FREQ_BINS
+        vel_scale = (2 * MAX_VELOCITY) / FREQ_BINS
         self._img.setTransform(
-            QtGui.QTransform().scale(time_scale, freq_scale)
+            QtGui.QTransform().scale(time_scale, vel_scale).translate(0, -FREQ_BINS / 2)
         )
 
         plot.setXRange(0, DISPLAY_SECONDS, padding=0)
-        plot.setYRange(0, 1, padding=0)
+        plot.setYRange(-MAX_VELOCITY, MAX_VELOCITY, padding=0)
 
-        center = 0.5
         zero_line = pg.InfiniteLine(
-            pos=center,
+            pos=0,
             angle=0,
-            pen=pg.mkPen(color=(255, 255, 255, 40), width=1)
+            pen=pg.mkPen(color=(255, 255, 255, 60), width=1)
         )
         plot.addItem(zero_line)
 
