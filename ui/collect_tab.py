@@ -106,12 +106,13 @@ def _collect_style(c: dict) -> str:
         font-weight: bold;
     }}
     QPushButton#stop_btn:hover {{ background-color: #e74c3c; }}
-    QProgressBar {{
+        QProgressBar {{
         border: none;
         border-radius: 4px;
-        background: {c['progress_bg']};
+        background: #e0e0e0;
         max-height: 8px;
-        font-size: 0px;
+        text-align: center;
+        color: transparent;
     }}
     QProgressBar::chunk {{
         background-color: {c['accent']};

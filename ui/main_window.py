@@ -5,6 +5,7 @@ from PyQt6 import QtWidgets, QtCore, QtGui
 from ui import app_colors
 from ui.spectrogram_widget import SpectrogramWidget
 from ui.collect_tab import CollectTab
+from ui.train_tab import TrainTab
 from core.radar import RadarStream
 from core.processing import SpectrogramProcessor
 
@@ -266,11 +267,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self._collect_tab = CollectTab()
         self._tabs.addTab(self._collect_tab, "🎙   Collect")
 
-        self._tabs.addTab(PlaceholderTab(
-            "Train Model",
-            "Complete data collection first, then train your gesture recognition model here.",
-            "🧠"
-        ), "🧠   Train")
+        self._train_tab = TrainTab()
+        self._tabs.addTab(self._train_tab, "🧠   Train")
 
         self._tabs.addTab(PlaceholderTab(
             "Test Gestures",
@@ -294,7 +292,10 @@ class MainWindow(QtWidgets.QMainWindow):
         return self._tabs
 
     def _on_tab_clicked(self, index):
-        if index <= 1:
+        if index == 0 or index == 1:
+            return
+        if index == 2:
+            self._train_tab.refresh()
             return
         self._show_soft_lock(
             "Complete the previous steps first — this tab will unlock as you progress."
