@@ -1,4 +1,4 @@
-from PyQt6 import QtWidgets, QtGui
+from PyQt6 import QtWidgets, QtGui, QtCore
 
 
 def is_dark_mode() -> bool:
@@ -41,3 +41,31 @@ def app_colors() -> dict:
         hint_text='#888888',
         progress_bg='#e0e0e0',
     )
+
+
+class HintCard(QtWidgets.QLabel):
+    """Rotating hint label. Cycles through `hints` every `interval_ms` ms."""
+
+    def __init__(self, hints: list, c: dict | None = None,
+                 interval_ms: int = 7000, parent=None):
+        super().__init__(parent)
+        self._hints = hints
+        self._index = 0
+        self.setWordWrap(True)
+        colors = c or app_colors()
+        self.setStyleSheet(
+            f"font-size: 12px; color: {colors['hint_text']}; "
+            f"background: {colors['hint_bg']}; border-radius: 6px; padding: 10px;"
+        )
+        self._show()
+        if len(hints) > 1:
+            t = QtCore.QTimer(self)
+            t.timeout.connect(self._advance)
+            t.start(interval_ms)
+
+    def _advance(self):
+        self._index = (self._index + 1) % len(self._hints)
+        self._show()
+
+    def _show(self):
+        self.setText(f"💡  {self._hints[self._index]}")

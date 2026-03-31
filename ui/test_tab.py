@@ -5,6 +5,7 @@ from collections import deque
 from scipy.ndimage import gaussian_filter
 from PyQt6 import QtWidgets, QtCore, QtGui
 from core.processing import SpectrogramProcessor
+from ui import HintCard
 from ui.spectrogram_widget import DB_MIN, DB_MAX, FREQ_BINS, MAX_VELOCITY, FRAME_TIME_S
 
 
@@ -522,6 +523,18 @@ class TestTab(QtWidgets.QWidget):
         layout.addWidget(self._rs_box)
 
         layout.addStretch()
+
+        layout.addWidget(HintCard([
+            "Single Prediction: capture one gesture window and see "
+            "the model's confidence for every class.",
+            "RoboSoccer: the model runs live — swipe left/right to steer, "
+            "push to accelerate, idle to coast.",
+            "Confidence threshold: the model must be at least this sure "
+            "before steering the robot. Lower it if the robot feels unresponsive.",
+            "The bars show probability per class. A sharp peak means a confident prediction.",
+            "If predictions are wrong, collect more samples of that gesture and retrain.",
+            "The robot wraps around the field edges — try to score a goal!",
+        ]))
 
         self._status = QtWidgets.QLabel("")
         self._status.setObjectName("test_status")

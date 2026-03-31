@@ -5,7 +5,7 @@ import numpy as np
 from pathlib import Path
 from PyQt6 import QtWidgets, QtCore, QtGui
 import pyqtgraph as pg
-from ui import app_colors
+from ui import app_colors, HintCard
 
 
 def _train_style(c: dict) -> str:
@@ -539,6 +539,11 @@ class TrainTab(QtWidgets.QWidget):
         self._epochs = QtWidgets.QSpinBox()
         self._epochs.setRange(1, 50)
         self._epochs.setValue(15)
+        self._epochs.setToolTip(
+            "One epoch = one full pass through all training samples.\n"
+            "More epochs can improve accuracy but risk overfitting.\n"
+            "15 is a good starting point for small gesture datasets."
+        )
         row_epochs.addWidget(self._epochs)
         layout.addLayout(row_epochs)
 
@@ -547,6 +552,11 @@ class TrainTab(QtWidgets.QWidget):
         self._batch_size = QtWidgets.QSpinBox()
         self._batch_size.setRange(1, 64)
         self._batch_size.setValue(8)
+        self._batch_size.setToolTip(
+            "How many samples the model sees before updating its weights.\n"
+            "Smaller batches (4–8) work well for small datasets.\n"
+            "Larger batches train faster but need more memory."
+        )
         row_batch.addWidget(self._batch_size)
         layout.addLayout(row_batch)
 
@@ -557,6 +567,12 @@ class TrainTab(QtWidgets.QWidget):
         self._lr.setRange(0.000001, 0.01)
         self._lr.setSingleStep(0.00001)
         self._lr.setValue(0.00002)
+        self._lr.setToolTip(
+            "Controls how big each weight update step is.\n"
+            "Too high → unstable training (loss spikes).\n"
+            "Too low → very slow learning.\n"
+            "2e-5 (0.00002) is a proven default for fine-tuning ViT."
+        )
         row_lr.addWidget(self._lr)
         layout.addLayout(row_lr)
 
@@ -566,7 +582,9 @@ class TrainTab(QtWidgets.QWidget):
         self._val_subjects.setRange(1, 10)
         self._val_subjects.setValue(1)
         self._val_subjects.setToolTip(
-            "Number of students held out for validation (leave-one-subject-out)."
+            "Number of students held out from training to test the model.\n"
+            "Their data is never seen during training — this gives an honest\n"
+            "accuracy score. Higher = fairer test, less training data."
         )
         row_val.addWidget(self._val_subjects)
         layout.addLayout(row_val)
@@ -595,6 +613,20 @@ class TrainTab(QtWidgets.QWidget):
         layout.addWidget(self._download_btn)
 
         layout.addStretch()
+
+        layout.addWidget(HintCard([
+            "Epochs: one full pass through all your samples. "
+            "Watch the chart — stop early if val loss starts rising.",
+            "Batch size: samples seen before each weight update. "
+            "Keep it at 8 for small datasets; increase if training is slow.",
+            "Learning rate: step size for weight updates. "
+            "Too high = chaotic loss. Too low = barely learning. 0.00002 is safe.",
+            "Val subjects: students held out for testing. "
+            "Their gestures are never shown during training — the accuracy score is honest.",
+            "F1 score (orange) is more reliable than accuracy when gesture classes are uneven.",
+            "If accuracy plateaus early, try collecting more samples or increasing epochs.",
+            "The model is fine-tuning a Vision Transformer (ViT) pre-trained on millions of images.",
+        ], c=self._c))
 
         self._train_btn = QtWidgets.QPushButton("▶  Start Training")
         self._train_btn.setObjectName("train_btn")

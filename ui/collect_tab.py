@@ -4,7 +4,7 @@ import numpy as np
 from PyQt6 import QtWidgets, QtCore, QtGui
 from scipy.ndimage import gaussian_filter
 from core.processing import SpectrogramProcessor
-from ui import app_colors
+from ui import app_colors, HintCard
 from ui.spectrogram_widget import (
     DB_MIN, DB_MAX, FREQ_BINS, MAX_VELOCITY, FRAME_TIME_S, make_jet_colormap,
 )
@@ -318,17 +318,20 @@ class CollectTab(QtWidgets.QWidget):
 
         layout.addWidget(self._divider())
 
-        instructions = QtWidgets.QLabel(
-            "💡  Enter your name and gesture label above, "
-            "then click Start to begin collecting samples. "
-            "Each sample will be previewed on the right after capture."
-        )
-        instructions.setWordWrap(True)
-        instructions.setStyleSheet(
-            f"font-size: 12px; color: {self._c['hint_text']}; "
-            f"background: {self._c['hint_bg']}; border-radius: 6px; padding: 10px;"
-        )
-        layout.addWidget(instructions)
+        layout.addWidget(HintCard([
+            "Enter your name and gesture label, then click Start "
+            "to begin collecting samples.",
+            "Consistency matters — keep the same speed, distance, "
+            "and hand position for every sample.",
+            "Collect at least 25 samples per gesture per person "
+            "for good model accuracy.",
+            "The delay between samples gives you time to reset "
+            "your position before the next capture.",
+            "Each sample is saved as both a .npy (raw data) and "
+            "a .png (image) — the PNG is what the model trains on.",
+            "Try a few different people collecting data — the model "
+            "generalises better across users.",
+        ], c=self._c))
 
         self._progress_bar = QtWidgets.QProgressBar()
         self._progress_bar.setValue(0)
