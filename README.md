@@ -14,18 +14,27 @@ A radar-based gesture recognition and ML education tool built on the Infineon BG
 
 ### Install
 ```bash
-conda create -n sendsv2 python=3.11 -y
-conda activate sendsv2
+conda create -n sensds2 python=3.11 -y
+conda activate sensds2
 pip install -r requirements.txt
 pip install <platform-specific-ifxradarsdk>.whl
 ```
 
-**Mac:** `ifxradarsdk-3_6_4_4b4a6245-py3-none-macosx_10_14_universal2.whl`
+**Mac:** `ifxradarsdk-3_6_4_4b4a6245-py3-none-macosx_10_14_universal2.whl`  
 **Windows:** `ifxradarsdk-3_6_4_4b4a6245-py3-none-win_amd64.whl`
 
 ### Verify
 ```bash
 python -c "import PyQt6; import pyqtgraph; import ifxradarsdk; print('all good')"
+```
+
+---
+
+## Running the Application
+
+From the project root:
+```bash
+python main.py
 ```
 
 ---
@@ -76,10 +85,10 @@ SensDSv2/
 - Replaced sidebar with compact dark top bar (logo, status, timer, connect/disconnect)
 - Full-width tab bar: Visualize, Collect, Train, Test, Results, RoboSoccer
 - Tabs 3-6 are soft-locked placeholders — warning shown but still accessible
-- RadarBridge emits two signals: frame_ready (processed spectrogram) and raw_frame_ready (raw frames for collect tab)
+- RadarBridge emits two signals: `frame_ready` (processed spectrogram) and `raw_frame_ready` (raw frames for collect tab)
 - Collect tab: student name → personal data folder, gesture dropdown with custom label option
 - Batch collection: countdown → capture → preview → save, repeats per sample count
-- Saves both .npy (raw spectrogram) and .png (jet colormap, 400×300, for ViT training)
+- Saves both `.npy` (raw spectrogram) and `.png` (jet colormap, 400×300, for ViT training)
 - Preview uses same pyqtgraph plot style as live display with calibrated velocity/time axes
 - Open Data Folder button works on Mac and Windows
 - Verified on macOS (arm64) and Windows (x86_64)
@@ -108,3 +117,11 @@ Sliding window FFT across the 1D signal. Output is frequency vs time — the spe
 
 ### dB scale
 Compresses signal dynamic range so the display is readable. Max signal = 0 dB, everything else is how far below that ceiling it falls.
+
+---
+
+## Notes
+- Platform-specific SDK wheel must be installed manually per environment.
+- Build executables separately on macOS and Windows using PyInstaller.
+- Do not commit build artifacts (`dist/`, `build/`, `.spec`, `.zip`).
+
