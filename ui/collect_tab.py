@@ -414,14 +414,23 @@ class CollectTab(QtWidgets.QWidget):
         )
         os.makedirs(self._save_dir, exist_ok=True)
 
-        self._samples_collected = 0
+        # Continue numbering from where we left off instead of restarting at 0.
+        import re as _re
+        existing_nums = []
+        for fname in os.listdir(self._save_dir):
+            m = _re.match(r'sample_(\d+)\.npy', fname)
+            if m:
+                existing_nums.append(int(m.group(1)))
+        self._samples_collected = max(existing_nums) if existing_nums else 0
+
         self._total_samples = self._num_samples.value()
         self._progress_bar.setMaximum(self._total_samples)
         self._progress_bar.setValue(0)
         self._progress_bar.setVisible(True)
         self._collect_btn.setVisible(False)
         self._stop_btn.setVisible(True)
-        self._status_msg.setText(f"Saving to ~/SensDSv2_data/{name}/{label}/")
+        offset_note = f"  (continuing from {self._samples_collected})" if self._samples_collected > 0 else ""
+        self._status_msg.setText(f"Saving to ~/SensDSv2_data/{name}/{label}/{offset_note}")
         self._status_msg.setStyleSheet("font-size: 11px; color: #888;")
 
         self._worker = CaptureWorker(
@@ -446,13 +455,13 @@ class CollectTab(QtWidgets.QWidget):
     def _on_countdown(self, count):
         self._status_msg.setText(f"Get ready... {count}")
         self._status_msg.setStyleSheet(
-            "color: #e67e22; font-size: 13px; font-weight: bold;"
+            "color: #e67e22; font-size: 22px; font-weight: bold;"
         )
 
     def _on_capturing(self):
-        self._status_msg.setText("⬤  Capturing — perform your gesture now!")
+        self._status_msg.setText("⬤  Perform your gesture NOW!")
         self._status_msg.setStyleSheet(
-            "color: #c0392b; font-size: 13px; font-weight: bold;"
+            "color: #c0392b; font-size: 22px; font-weight: bold;"
         )
 
     def _on_sample_done(self, spectrogram, n_frames):
@@ -517,7 +526,7 @@ class CollectTab(QtWidgets.QWidget):
         )
         self._status_msg.setText(f"✓ Sample {self._samples_collected} saved.")
         self._status_msg.setStyleSheet(
-            "color: #27ae60; font-size: 13px; font-weight: bold;"
+            "color: #27ae60; font-size: 18px; font-weight: bold;"
         )
 
     def _on_batch_done(self):
