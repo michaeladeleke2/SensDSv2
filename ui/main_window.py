@@ -6,6 +6,7 @@ from ui import app_colors
 from ui.spectrogram_widget import SpectrogramWidget
 from ui.collect_tab import CollectTab
 from ui.train_tab import TrainTab
+from ui.test_tab import TestTab
 from core.radar import RadarStream
 from core.processing import SpectrogramProcessor
 
@@ -277,11 +278,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self._train_tab = TrainTab()
         self._tabs.addTab(self._train_tab, "🧠   Train")
 
-        self._tabs.addTab(PlaceholderTab(
-            "Test Gestures",
-            "After training, test individual gestures and see live predictions.",
-            "✋"
-        ), "✋   Test")
+        self._test_tab = TestTab()
+        self._tabs.addTab(self._test_tab, "✋   Test")
 
         self._tabs.addTab(PlaceholderTab(
             "Results",
@@ -303,6 +301,18 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         if index == 2:
             self._train_tab.refresh()
+            return
+        if index == 3:
+            models_root = os.path.join(os.path.expanduser("~"), "SensDSv2_data", "models")
+            has_model = os.path.isdir(models_root) and any(
+                os.path.isdir(os.path.join(models_root, d))
+                for d in os.listdir(models_root)
+                if not d.startswith(".")
+            ) if os.path.isdir(models_root) else False
+            if has_model:
+                self._test_tab.refresh()
+                return
+            self._show_soft_lock("Train a model first before testing.")
             return
         self._show_soft_lock(
             "Complete the previous steps first — this tab will unlock as you progress."
@@ -330,6 +340,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self._bridge = RadarBridge()
             self._bridge.frame_ready.connect(self._spectrogram.update_frame)
             self._bridge.raw_frame_ready.connect(self._collect_tab.on_raw_frame)
+            self._bridge.raw_frame_ready.connect(self._test_tab.on_raw_frame)
             self._bridge.error_occurred.connect(self._on_radar_error)
             self._bridge.start()
             self._set_connected(True)
