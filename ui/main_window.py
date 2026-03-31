@@ -194,14 +194,19 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         if os.path.exists(logo_path):
             logo_container = QtWidgets.QLabel()
-            logo_container.setStyleSheet(
-                "background-color: white; border-radius: 6px; padding: 3px 8px;"
-            )
+            logo_container.setStyleSheet("background: transparent;")
             pixmap = QtGui.QPixmap(logo_path).scaledToHeight(
-                36, QtCore.Qt.TransformationMode.SmoothTransformation
+                52, QtCore.Qt.TransformationMode.SmoothTransformation
             )
             logo_container.setPixmap(pixmap)
             logo_container.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+            # White glow so the dark-blue logo text pops off the dark topbar
+            # without needing a background pill.
+            glow = QtWidgets.QGraphicsDropShadowEffect()
+            glow.setBlurRadius(18)
+            glow.setColor(QtGui.QColor(255, 255, 255, 180))
+            glow.setOffset(0, 0)
+            logo_container.setGraphicsEffect(glow)
             layout.addWidget(logo_container)
         else:
             title = QtWidgets.QLabel("SensDSv2")
