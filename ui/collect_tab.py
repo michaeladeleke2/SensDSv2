@@ -620,8 +620,12 @@ class CollectTab(QtWidgets.QWidget):
 
         self._refresh_counts()
         self._open_folder_btn.setEnabled(True)
+        total_in_folder = sum(
+            1 for f in os.listdir(self._save_dir) if f.endswith(".npy")
+        )
+        gesture_label = self._gesture_combo.currentText().strip()
         self._sample_count.setText(
-            f"Sample {self._samples_collected} of {self._total_samples} saved  •  {self._save_dir}"
+            f"#{self._samples_collected} saved  —  {total_in_folder} total for '{gesture_label}'"
         )
         self._status_msg.setText(f"✓ Sample {self._samples_collected} saved.")
         self._status_msg.setStyleSheet(

@@ -82,12 +82,13 @@ def _train_style(c: dict) -> str:
         color: {c['text']};
     }}
     QPlainTextEdit {{
-        background: #1a1a2e;
-        color: #a8d8a8;
+        background: {c['panel']};
+        color: {c['text']};
         font-family: monospace;
         font-size: 12px;
-        border: none;
+        border: 1px solid {c['border']};
         border-radius: 6px;
+        padding: 4px;
     }}
     QLabel#section_heading {{
         font-size: 13px;
@@ -794,8 +795,20 @@ class TrainTab(QtWidgets.QWidget):
 
     def _start_training(self):
         student_filter = self._get_selected_students()
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_dir = os.path.join(MODELS_DIR, f"run_{timestamp}")
+
+        if student_filter is None:
+            _, all_students = scan_dataset()
+            subjects = sorted(all_students)
+        else:
+            subjects = sorted(student_filter)
+        base_name = "_".join(subjects) if subjects else "all_students"
+        if len(base_name) > 60:
+            base_name = base_name[:60]
+        os.makedirs(MODELS_DIR, exist_ok=True)
+        version = 1
+        while os.path.isdir(os.path.join(MODELS_DIR, f"{base_name}_v{version}")):
+            version += 1
+        output_dir = os.path.join(MODELS_DIR, f"{base_name}_v{version}")
 
         self._loss_data = []
         self._acc_data = []

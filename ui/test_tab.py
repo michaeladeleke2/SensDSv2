@@ -269,20 +269,31 @@ class SoccerFieldWidget(QtWidgets.QWidget):
             p.setBrush(QtGui.QColor(180, 180, 180, alpha))
             p.drawEllipse(QtCore.QPointF(tx, ty), 3, 3)
 
-        # Ball
-        p.setPen(QtGui.QPen(QtGui.QColor(100, 100, 100), 1))
-        p.setBrush(QtGui.QBrush(QtCore.Qt.GlobalColor.white))
-        p.drawEllipse(QtCore.QPointF(self._bx, self._by), _BALL_R, _BALL_R)
+        # Ball — ⚽ emoji
+        ball_font = QtGui.QFont()
+        ball_font.setPixelSize(_BALL_R * 2)
+        p.setFont(ball_font)
+        p.setPen(QtCore.Qt.GlobalColor.white)
+        p.drawText(
+            QtCore.QRectF(self._bx - _BALL_R, self._by - _BALL_R,
+                          _BALL_R * 2, _BALL_R * 2),
+            QtCore.Qt.AlignmentFlag.AlignCenter, "⚽",
+        )
 
-        # Robot body
-        p.setPen(QtGui.QPen(QtCore.Qt.GlobalColor.white, 2))
-        p.setBrush(QtGui.QBrush(QtGui.QColor("#1a3a5c")))
-        p.drawEllipse(QtCore.QPointF(self._rx, self._ry), _ROBOT_R, _ROBOT_R)
+        # Robot — 🤖 emoji
+        robot_font = QtGui.QFont()
+        robot_font.setPixelSize(_ROBOT_R * 2)
+        p.setFont(robot_font)
+        p.drawText(
+            QtCore.QRectF(self._rx - _ROBOT_R, self._ry - _ROBOT_R,
+                          _ROBOT_R * 2, _ROBOT_R * 2),
+            QtCore.Qt.AlignmentFlag.AlignCenter, "🤖",
+        )
 
-        # Direction indicator
+        # Direction indicator — white arrow tip extending from robot center
         a = math.radians(self._heading)
-        ex = self._rx + math.cos(a) * _ROBOT_R
-        ey = self._ry + math.sin(a) * _ROBOT_R
+        ex = self._rx + math.cos(a) * (_ROBOT_R + 8)
+        ey = self._ry + math.sin(a) * (_ROBOT_R + 8)
         p.setPen(QtGui.QPen(QtCore.Qt.GlobalColor.white, 2))
         p.drawLine(QtCore.QPointF(self._rx, self._ry), QtCore.QPointF(ex, ey))
 
@@ -409,15 +420,15 @@ class TestTab(QtWidgets.QWidget):
         panel.setObjectName("test_left")
         panel.setFixedWidth(300)
         layout = QtWidgets.QVBoxLayout(panel)
-        layout.setContentsMargins(20, 20, 20, 20)
-        layout.setSpacing(10)
+        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setSpacing(7)
 
         heading = QtWidgets.QLabel("Test Gestures")
         heading.setObjectName("test_heading")
         layout.addWidget(heading)
         layout.addWidget(self._divider())
 
-        # Model loader
+        # ── model section ──
         load_btn = QtWidgets.QPushButton("📂  Load Model")
         load_btn.setStyleSheet("""
             QPushButton {
@@ -435,9 +446,31 @@ class TestTab(QtWidgets.QWidget):
         self._model_lbl.setWordWrap(True)
         layout.addWidget(self._model_lbl)
 
+        # Classes chip strip — shown after model loads
+        self._classes_frame = QtWidgets.QFrame()
+        self._classes_frame.setStyleSheet(
+            "QFrame { background: #eef2f8; border-radius: 6px; border: 1px solid #d0d8e8; }"
+        )
+        self._classes_frame.setVisible(False)
+        cf = QtWidgets.QVBoxLayout(self._classes_frame)
+        cf.setContentsMargins(8, 6, 8, 6)
+        cf.setSpacing(2)
+        self._classes_title = QtWidgets.QLabel("Classes")
+        self._classes_title.setStyleSheet(
+            "font-size: 10px; font-weight: bold; color: #1a3a5c; border: none;"
+        )
+        cf.addWidget(self._classes_title)
+        self._classes_lbl = QtWidgets.QLabel("")
+        self._classes_lbl.setWordWrap(True)
+        self._classes_lbl.setStyleSheet(
+            "font-size: 11px; color: #333; border: none; line-height: 1.4;"
+        )
+        cf.addWidget(self._classes_lbl)
+        layout.addWidget(self._classes_frame)
+
         layout.addWidget(self._divider())
 
-        # Mode selection
+        # ── mode selection ──
         layout.addWidget(self._flbl("Mode"))
         self._radio_single = QtWidgets.QRadioButton("Single Prediction")
         self._radio_single.setChecked(True)
@@ -449,8 +482,8 @@ class TestTab(QtWidgets.QWidget):
         # ── single prediction controls ──
         self._single_box = QtWidgets.QWidget()
         sb = QtWidgets.QVBoxLayout(self._single_box)
-        sb.setContentsMargins(0, 6, 0, 0)
-        sb.setSpacing(6)
+        sb.setContentsMargins(0, 4, 0, 0)
+        sb.setSpacing(5)
         sb.addWidget(self._flbl("Capture Duration (s)"))
         self._duration = QtWidgets.QDoubleSpinBox()
         self._duration.setRange(1.0, 10.0)
@@ -468,8 +501,8 @@ class TestTab(QtWidgets.QWidget):
         self._rs_box = QtWidgets.QWidget()
         self._rs_box.setVisible(False)
         rb = QtWidgets.QVBoxLayout(self._rs_box)
-        rb.setContentsMargins(0, 6, 0, 0)
-        rb.setSpacing(6)
+        rb.setContentsMargins(0, 4, 0, 0)
+        rb.setSpacing(5)
         rb.addWidget(self._flbl("Confidence Threshold"))
         self._conf_threshold = QtWidgets.QDoubleSpinBox()
         self._conf_threshold.setRange(0.1, 1.0)
@@ -493,7 +526,7 @@ class TestTab(QtWidgets.QWidget):
         self._status = QtWidgets.QLabel("")
         self._status.setObjectName("test_status")
         self._status.setWordWrap(True)
-        self._status.setMinimumHeight(44)
+        self._status.setMinimumHeight(40)
         layout.addWidget(self._status)
 
         return panel
@@ -566,11 +599,16 @@ class TestTab(QtWidgets.QWidget):
             self._model_lbl.setStyleSheet(
                 "font-size: 11px; color: #27ae60; font-family: monospace;"
             )
+            # Show class chips
+            class_names = [self._id2label[i] for i in sorted(self._id2label)]
+            self._classes_lbl.setText("  ·  ".join(class_names))
+            self._classes_title.setText(
+                f"Classes  ({len(class_names)})"
+            )
+            self._classes_frame.setVisible(True)
             self._capture_btn.setEnabled(True)
             self._rs_start_btn.setEnabled(True)
-            self._status.setText(
-                f"Loaded — {len(self._id2label)} classes"
-            )
+            self._status.setText(f"Loaded — {len(self._id2label)} classes")
             self._field.reset()
         except Exception as e:
             self._model = None
@@ -579,6 +617,7 @@ class TestTab(QtWidgets.QWidget):
             self._model_lbl.setStyleSheet(
                 "font-size: 11px; color: #c0392b; font-family: monospace;"
             )
+            self._classes_frame.setVisible(False)
             self._capture_btn.setEnabled(False)
             self._rs_start_btn.setEnabled(False)
             self._status.setText("Failed to load model.")
