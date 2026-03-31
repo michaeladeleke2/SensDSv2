@@ -105,6 +105,35 @@ MODELS_DIR = os.path.join(DATA_ROOT, "models")
 # Look for a bundled ViT model next to the project root (mirrors phygo layout)
 _HERE = Path(__file__).resolve().parent
 _BUNDLED_MODEL = _HERE.parent / "models" / "vit-base-patch16-224"
+_HF_MODEL_ID = "google/vit-base-patch16-224"
+
+
+def _hf_cache_snapshot() -> Path | None:
+    """Return the path to the locally cached HF snapshot if it exists."""
+    cache_root = Path(os.environ.get("HF_HOME", Path.home() / ".cache" / "huggingface"))
+    snapshots = cache_root / "hub" / "models--google--vit-base-patch16-224" / "snapshots"
+    if snapshots.exists():
+        candidates = sorted(snapshots.iterdir())
+        for snap in reversed(candidates):          # prefer newest
+            if (snap / "config.json").exists():
+                return snap
+    return None
+
+
+def _resolve_model() -> tuple[str, str]:
+    """Return (model_path_or_id, human_label) for the best available source."""
+    if _BUNDLED_MODEL.exists() and (_BUNDLED_MODEL / "config.json").exists():
+        return str(_BUNDLED_MODEL), f"local bundle ({_BUNDLED_MODEL.name})"
+    snap = _hf_cache_snapshot()
+    if snap:
+        return str(snap), f"HF cache ({snap.parent.parent.name[:20]}…)"
+    return _HF_MODEL_ID, "HuggingFace (requires internet)"
+
+
+def model_is_available_offline() -> bool:
+    if _BUNDLED_MODEL.exists() and (_BUNDLED_MODEL / "config.json").exists():
+        return True
+    return _hf_cache_snapshot() is not None
 
 
 def scan_dataset(student_filter=None):
@@ -146,6 +175,29 @@ def _split_subjects(root_dir, val_subjects=1, seed=42):
     rng.shuffle(arr)
     n_val = max(1, min(val_subjects, len(arr) - 1))
     return list(arr[n_val:]), list(arr[:n_val])
+
+
+class DownloadWorker(QtCore.QObject):
+    """Downloads google/vit-base-patch16-224 into the local models/ directory."""
+    progress = QtCore.pyqtSignal(str)
+    finished = QtCore.pyqtSignal()
+    error = QtCore.pyqtSignal(str)
+
+    @QtCore.pyqtSlot()
+    def run(self):
+        try:
+            from huggingface_hub import snapshot_download
+            dest = str(_BUNDLED_MODEL)
+            self.progress.emit("Downloading ViT model weights from HuggingFace…")
+            snapshot_download(
+                repo_id=_HF_MODEL_ID,
+                local_dir=dest,
+                ignore_patterns=["*.msgpack", "flax_model*", "tf_model*", "rust_model*"],
+            )
+            self.progress.emit(f"✓ Model saved to {dest}")
+            self.finished.emit()
+        except Exception as e:
+            self.error.emit(str(e))
 
 
 class TrainWorker(QtCore.QObject):
@@ -199,12 +251,14 @@ class TrainWorker(QtCore.QObject):
             self.log.emit(f"Device: {device}")
 
             # --- Model source ---
-            if _BUNDLED_MODEL.exists():
-                model_src = str(_BUNDLED_MODEL)
-                self.log.emit(f"Using bundled model: {model_src}")
+            model_src, model_label = _resolve_model()
+            if model_src == _HF_MODEL_ID:
+                self.log.emit(
+                    "⚠  No local model found — attempting HuggingFace download.\n"
+                    "   Connect to the internet or click 'Download Model' first."
+                )
             else:
-                model_src = "google/vit-base-patch16-224"
-                self.log.emit(f"Downloading model from HuggingFace: {model_src}")
+                self.log.emit(f"Model: {model_label}")
 
             processor = AutoImageProcessor.from_pretrained(model_src)
 
@@ -516,6 +570,29 @@ class TrainTab(QtWidgets.QWidget):
         row_val.addWidget(self._val_subjects)
         layout.addLayout(row_val)
 
+        layout.addWidget(self._divider())
+
+        layout.addWidget(self._lbl("Base Model"))
+        self._model_status = QtWidgets.QLabel("")
+        self._model_status.setWordWrap(True)
+        layout.addWidget(self._model_status)
+
+        self._download_btn = QtWidgets.QPushButton("⬇  Download Model (once)")
+        self._download_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: {self._c['panel']};
+                border: 1px solid {self._c['border']};
+                border-radius: 5px;
+                padding: 6px 10px;
+                font-size: 12px;
+                color: {self._c['text']};
+            }}
+            QPushButton:hover {{ background: {self._c['tab_hover']}; }}
+            QPushButton:disabled {{ color: {self._c['faint']}; }}
+        """)
+        self._download_btn.clicked.connect(self._start_download)
+        layout.addWidget(self._download_btn)
+
         layout.addStretch()
 
         self._train_btn = QtWidgets.QPushButton("▶  Start Training")
@@ -610,7 +687,43 @@ class TrainTab(QtWidgets.QWidget):
         line.setStyleSheet(f"color: {self._c['divider']}; margin: 2px 0;")
         return line
 
+    def _refresh_model_status(self):
+        if model_is_available_offline():
+            _, label = _resolve_model()
+            self._model_status.setObjectName("status_ok")
+            self._model_status.setText(f"✓  {label}")
+            self._download_btn.setEnabled(False)
+            self._download_btn.setText("✓  Model ready")
+        else:
+            self._model_status.setObjectName("status_warn")
+            self._model_status.setText("⚠  Not downloaded — training requires internet without this")
+            self._download_btn.setEnabled(True)
+        self._model_status.style().unpolish(self._model_status)
+        self._model_status.style().polish(self._model_status)
+
+    def _start_download(self):
+        self._download_btn.setEnabled(False)
+        self._download_btn.setText("Downloading…")
+        self._model_status.setObjectName("status_warn")
+        self._model_status.setText("Downloading model weights, please wait…")
+
+        dl_worker = DownloadWorker()
+        dl_thread = QtCore.QThread(self)
+        dl_worker.moveToThread(dl_thread)
+        dl_thread.started.connect(dl_worker.run)
+        dl_worker.progress.connect(lambda msg: self._model_status.setText(msg))
+        dl_worker.finished.connect(lambda: (dl_thread.quit(), self._refresh_model_status()))
+        dl_worker.error.connect(lambda err: (
+            dl_thread.quit(),
+            self._model_status.setText(f"✗  Download failed: {err}"),
+            self._download_btn.setEnabled(True),
+            self._download_btn.setText("⬇  Download Model (once)"),
+        ))
+        dl_thread.finished.connect(dl_thread.deleteLater)
+        dl_thread.start()
+
     def refresh(self):
+        self._refresh_model_status()
         class_counts, students = scan_dataset()
 
         while self._student_list_layout.count():
