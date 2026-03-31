@@ -556,13 +556,13 @@ class TrainTab(QtWidgets.QWidget):
         self._chart.setYRange(0, 1.05, padding=0)
         self._chart.showGrid(x=True, y=True, alpha=0.3)
         self._loss_curve = self._chart.plot(
-            [], [], name='Val Loss', pen=pg.mkPen('#e74c3c', width=2)
+            [], [], name='Val Loss', pen=pg.mkPen('#e74c3c', width=3)
         )
         self._acc_curve = self._chart.plot(
-            [], [], name='Accuracy', pen=pg.mkPen('#2ecc71', width=2)
+            [], [], name='Accuracy', pen=pg.mkPen('#2ecc71', width=3)
         )
         self._f1_curve = self._chart.plot(
-            [], [], name='F1 (macro)', pen=pg.mkPen('#f39c12', width=2, style=QtCore.Qt.PenStyle.DashLine)
+            [], [], name='F1 (macro)', pen=pg.mkPen('#f39c12', width=3, style=QtCore.Qt.PenStyle.DashLine)
         )
         self._chart.setMinimumHeight(260)
         layout.addWidget(self._chart)
