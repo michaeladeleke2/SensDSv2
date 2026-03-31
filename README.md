@@ -65,10 +65,24 @@ SensDSv2/
 
 ### Step 4 — ui/spectrogram_widget.py
 - pyqtgraph ImageItem with rolling buffer for live scrolling display
-- Jet colormap manually defined to match v1
-- `DB_MIN=-20` clips noise floor so gestures stand out
-- `gaussian_filter(sigma=[2.0, 1.5])` smooths across frequency and time axes
-- RadarBridge uses `pyqtSignal` to safely pass data from radar thread to GUI thread
+- Jet colormap manually defined to match v1 and published paper figures
+- Velocity axis: ±2.46 m/s derived from PRF=2000 Hz, wavelength=4.92mm (61 GHz)
+- Key parameters: NOVERLAP=248, DB_MIN=-20, BUFFER_WIDTH=400, gaussian_filter sigma=[2.0, 1.5]
+- Must accumulate 10 frames before first output (deque buffer in SpectrogramProcessor)
+- RadarBridge uses pyqtSignal to safely pass data from radar thread to GUI thread
+- Verified: matches micro-Doppler spectrogram style from Gurbuz et al. TAES/Radar Conference papers
+
+### Step 5 — ui/main_window.py + ui/collect_tab.py
+- Replaced sidebar with compact dark top bar (logo, status, timer, connect/disconnect)
+- Full-width tab bar: Visualize, Collect, Train, Test, Results, RoboSoccer
+- Tabs 3-6 are soft-locked placeholders — warning shown but still accessible
+- RadarBridge emits two signals: frame_ready (processed spectrogram) and raw_frame_ready (raw frames for collect tab)
+- Collect tab: student name → personal data folder, gesture dropdown with custom label option
+- Batch collection: countdown → capture → preview → save, repeats per sample count
+- Saves both .npy (raw spectrogram) and .png (jet colormap, 400×300, for ViT training)
+- Preview uses same pyqtgraph plot style as live display with calibrated velocity/time axes
+- Open Data Folder button works on Mac and Windows
+- Verified on macOS (arm64) and Windows (x86_64)
 
 ---
 
