@@ -101,6 +101,14 @@ def _app_style(c: dict) -> str:
     }}
 """
 
+def resource_path(relative_path):
+    try:
+        base_path = sys._MEIPASS
+    except AttributeError:
+        base_path = os.path.abspath(".")
+
+    return os.path.join(base_path, relative_path)
+
 
 class RadarBridge(QtCore.QObject):
     frame_ready = QtCore.pyqtSignal(np.ndarray)
@@ -166,6 +174,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("SensDSv2 — Sensing for Data Science")
+        self.setWindowIcon(QtGui.QIcon(resource_path("assets/SensDSLogo.png")))
         self.resize(1200, 700)
         self._bridge = None
         self._connected = False
@@ -194,9 +203,7 @@ class MainWindow(QtWidgets.QMainWindow):
         layout.setSpacing(12)
 
         # Logo
-        logo_path = os.path.abspath(
-            os.path.join(os.path.dirname(__file__), "..", "assets", "SensDSLogo.png")
-        )
+        logo_path = resource_path("assets/SensDSLogo.png")
         if os.path.exists(logo_path):
             logo_container = QtWidgets.QLabel()
             logo_container.setStyleSheet("background: transparent;")
