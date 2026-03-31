@@ -4,6 +4,7 @@ import numpy as np
 from PyQt6 import QtWidgets, QtCore, QtGui
 from scipy.ndimage import gaussian_filter
 from core.processing import SpectrogramProcessor
+from ui import app_colors
 from ui.spectrogram_widget import (
     DB_MIN, DB_MAX, FREQ_BINS, MAX_VELOCITY, FRAME_TIME_S, make_jet_colormap,
 )
@@ -37,55 +38,65 @@ def _apply_jet_colormap(normalized):
     return (np.stack([r, g, b], axis=-1) * 255).astype(np.uint8)
 
 
-COLLECT_STYLE = """
-    QWidget#collect_root { background: #f0f2f5; }
-    QWidget#left_panel {
-        background: #ffffff;
-        border-right: 1px solid #ddd;
-    }
-    QLabel#heading {
+def _collect_style(c: dict) -> str:
+    return f"""
+    QWidget#collect_root {{ background: {c['bg']}; }}
+    QWidget#left_panel {{
+        background: {c['panel']};
+        border-right: 1px solid {c['border']};
+    }}
+    QLabel#heading {{
         font-size: 16px;
         font-weight: bold;
-        color: #1a3a5c;
-    }
-    QLabel#field_label {
+        color: {c['accent']};
+    }}
+    QLabel#field_label {{
         font-size: 12px;
         font-weight: bold;
-        color: #555;
-    }
-    QLineEdit, QSpinBox, QDoubleSpinBox {
-        border: 1px solid #ccc;
+        color: {c['subtext']};
+    }}
+    QLineEdit, QSpinBox, QDoubleSpinBox {{
+        border: 1px solid {c['input_border']};
         border-radius: 5px;
         padding: 5px 8px;
         font-size: 13px;
-        background: white;
+        background: {c['input_bg']};
+        color: {c['text']};
         max-height: 30px;
-    }
-    QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus {
-        border: 1px solid #1a3a5c;
-    }
-    QComboBox {
-        border: 1px solid #ccc;
+    }}
+    QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus {{
+        border: 1px solid {c['accent']};
+    }}
+    QComboBox {{
+        border: 1px solid {c['input_border']};
         border-radius: 5px;
         padding: 5px 8px;
         font-size: 13px;
-        background: white;
+        background: {c['input_bg']};
+        color: {c['text']};
         max-height: 30px;
-    }
-    QComboBox:focus { border: 1px solid #1a3a5c; }
-    QComboBox::drop-down { border: none; }
-    QPushButton#collect_btn {
-        background-color: #1a3a5c;
+    }}
+    QComboBox:focus {{ border: 1px solid {c['accent']}; }}
+    QComboBox::drop-down {{ border: none; }}
+    QComboBox QAbstractItemView {{
+        background: {c['panel']};
+        color: {c['text']};
+        border: 1px solid {c['border']};
+        selection-background-color: {c['accent']};
+        selection-color: white;
+    }}
+    QPushButton#collect_btn {{
+        background-color: {c['accent']};
         color: white;
         border: none;
         border-radius: 6px;
         padding: 10px;
         font-size: 13px;
         font-weight: bold;
-    }
-    QPushButton#collect_btn:hover { background-color: #245080; }
-    QPushButton#collect_btn:disabled { background-color: #aaa; }
-    QPushButton#stop_btn {
+    }}
+    QPushButton#collect_btn:hover {{ background-color: #245080; }}
+    QPushButton#collect_btn:disabled {{ background-color: #aaa; }}
+    QPushButton#stop_btn {{
         background-color: #c0392b;
         color: white;
         border: none;
@@ -93,33 +104,33 @@ COLLECT_STYLE = """
         padding: 10px;
         font-size: 13px;
         font-weight: bold;
-    }
-    QPushButton#stop_btn:hover { background-color: #e74c3c; }
-    QProgressBar {
+    }}
+    QPushButton#stop_btn:hover {{ background-color: #e74c3c; }}
+    QProgressBar {{
         border: none;
         border-radius: 4px;
-        background: #e0e0e0;
+        background: {c['progress_bg']};
         max-height: 8px;
         font-size: 0px;
-    }
-    QProgressBar::chunk {
-        background-color: #1a3a5c;
+    }}
+    QProgressBar::chunk {{
+        background-color: {c['accent']};
         border-radius: 4px;
-    }
-    QLabel#status_msg {
+    }}
+    QLabel#status_msg {{
         font-size: 12px;
         color: #27ae60;
         font-weight: bold;
-    }
-    QLabel#preview_heading {
+    }}
+    QLabel#preview_heading {{
         font-size: 14px;
         font-weight: bold;
-        color: #1a3a5c;
-    }
-    QLabel#sample_count {
+        color: {c['accent']};
+    }}
+    QLabel#sample_count {{
         font-size: 12px;
-        color: #777;
-    }
+        color: {c['faint']};
+    }}
 """
 
 
@@ -187,8 +198,9 @@ class CaptureWorker(QtCore.QObject):
 class CollectTab(QtWidgets.QWidget):
     def __init__(self):
         super().__init__()
+        self._c = app_colors()
         self.setObjectName("collect_root")
-        self.setStyleSheet(COLLECT_STYLE)
+        self.setStyleSheet(_collect_style(self._c))
         self._worker = None
         self._thread = None
         self._samples_collected = 0
@@ -270,6 +282,41 @@ class CollectTab(QtWidgets.QWidget):
 
         layout.addWidget(self._divider())
 
+        # --- Gesture counts card ---
+        self._counts_frame = QtWidgets.QFrame()
+        self._counts_frame.setStyleSheet(
+            f"background: {self._c['hint_bg']}; border-radius: 6px;"
+        )
+        counts_outer = QtWidgets.QVBoxLayout(self._counts_frame)
+        counts_outer.setContentsMargins(10, 8, 10, 8)
+        counts_outer.setSpacing(4)
+
+        self._counts_title = QtWidgets.QLabel("Samples on disk")
+        self._counts_title.setStyleSheet(
+            f"font-size: 11px; font-weight: bold; color: {self._c['subtext']};"
+        )
+        counts_outer.addWidget(self._counts_title)
+
+        self._counts_grid = QtWidgets.QGridLayout()
+        self._counts_grid.setSpacing(2)
+        self._counts_grid.setContentsMargins(0, 0, 0, 0)
+        self._counts_grid.setColumnStretch(0, 1)
+        counts_outer.addLayout(self._counts_grid)
+
+        self._counts_empty_lbl = QtWidgets.QLabel("Enter a name above to see counts.")
+        self._counts_empty_lbl.setStyleSheet(
+            f"font-size: 11px; color: {self._c['faint']};"
+        )
+        self._counts_empty_lbl.setWordWrap(True)
+        counts_outer.addWidget(self._counts_empty_lbl)
+
+        layout.addWidget(self._counts_frame)
+
+        # Refresh counts whenever the name field changes
+        self._name_input.textChanged.connect(self._refresh_counts)
+
+        layout.addWidget(self._divider())
+
         instructions = QtWidgets.QLabel(
             "💡  Enter your name and gesture label above, "
             "then click Start to begin collecting samples. "
@@ -277,8 +324,8 @@ class CollectTab(QtWidgets.QWidget):
         )
         instructions.setWordWrap(True)
         instructions.setStyleSheet(
-            "font-size: 12px; color: #888; "
-            "background: #f0f4ff; border-radius: 6px; padding: 10px;"
+            f"font-size: 12px; color: {self._c['hint_text']}; "
+            f"background: {self._c['hint_bg']}; border-radius: 6px; padding: 10px;"
         )
         layout.addWidget(instructions)
 
@@ -310,7 +357,7 @@ class CollectTab(QtWidgets.QWidget):
 
     def _build_right_panel(self):
         panel = QtWidgets.QWidget()
-        panel.setStyleSheet("background: #f0f2f5;")
+        panel.setStyleSheet(f"background: {self._c['bg']};")
         layout = QtWidgets.QVBoxLayout(panel)
         layout.setContentsMargins(20, 20, 20, 20)
         layout.setSpacing(8)
@@ -362,19 +409,19 @@ class CollectTab(QtWidgets.QWidget):
         bottom_row.addStretch()
 
         self._open_folder_btn = QtWidgets.QPushButton("📂  Open Data Folder")
-        self._open_folder_btn.setStyleSheet("""
-            QPushButton {
-                background: white;
-                border: 1px solid #ccc;
+        self._open_folder_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: {self._c['panel']};
+                border: 1px solid {self._c['border']};
                 border-radius: 5px;
                 padding: 5px 12px;
                 font-size: 12px;
-                color: #333;
-            }
-            QPushButton:hover { background: #f0f0f0; }
-            QPushButton:disabled { color: #aaa; }
+                color: {self._c['text']};
+            }}
+            QPushButton:hover {{ background: {self._c['tab_hover']}; }}
+            QPushButton:disabled {{ color: #aaa; }}
         """)
-        self._open_folder_btn.setEnabled(False)
+        self._open_folder_btn.setEnabled(True)
         self._open_folder_btn.clicked.connect(self._open_data_folder)
         bottom_row.addWidget(self._open_folder_btn)
 
@@ -391,6 +438,56 @@ class CollectTab(QtWidgets.QWidget):
         line.setFrameShape(QtWidgets.QFrame.Shape.HLine)
         line.setStyleSheet("color: #eee; margin: 2px 0;")
         return line
+
+    def _refresh_counts(self):
+        name = self._name_input.text().strip()
+        base_dir = os.path.join(os.path.expanduser("~"), "SensDSv2_data")
+
+        # Clear previous rows from the grid
+        while self._counts_grid.count():
+            item = self._counts_grid.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        if not name:
+            self._counts_title.setText("Samples on disk")
+            self._counts_empty_lbl.setText("Enter a name above to see counts.")
+            self._counts_empty_lbl.setVisible(True)
+            return
+
+        self._counts_title.setText(f"Samples on disk  —  {name}")
+        student_dir = os.path.join(base_dir, name)
+
+        gestures = {}
+        if os.path.isdir(student_dir):
+            try:
+                for gesture in sorted(os.listdir(student_dir)):
+                    gpath = os.path.join(student_dir, gesture)
+                    if os.path.isdir(gpath):
+                        count = sum(1 for f in os.listdir(gpath) if f.endswith('.npy'))
+                        if count > 0:
+                            gestures[gesture] = count
+            except OSError:
+                pass
+
+        if not gestures:
+            self._counts_empty_lbl.setText("No samples collected yet.")
+            self._counts_empty_lbl.setVisible(True)
+            return
+
+        self._counts_empty_lbl.setVisible(False)
+        for row, (gesture, count) in enumerate(gestures.items()):
+            name_lbl = QtWidgets.QLabel(gesture)
+            name_lbl.setStyleSheet(
+                f"font-size: 11px; color: {self._c['subtext']};"
+            )
+            count_lbl = QtWidgets.QLabel(str(count))
+            count_lbl.setStyleSheet(
+                f"font-size: 11px; font-weight: bold; color: {self._c['accent']};"
+            )
+            count_lbl.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight)
+            self._counts_grid.addWidget(name_lbl, row, 0)
+            self._counts_grid.addWidget(count_lbl, row, 1)
 
     def on_raw_frame(self, frame):
         if self._worker:
@@ -511,6 +608,7 @@ class CollectTab(QtWidgets.QWidget):
         self._preview_plot.setXRange(0, duration, padding=0)
         self._preview_plot.setYRange(-MAX_VELOCITY, MAX_VELOCITY, padding=0)
 
+        self._refresh_counts()
         self._open_folder_btn.setEnabled(True)
         self._sample_count.setText(
             f"Sample {self._samples_collected} of {self._total_samples} saved  •  {self._save_dir}"
@@ -550,13 +648,11 @@ class CollectTab(QtWidgets.QWidget):
 
     def _open_data_folder(self):
         base_dir = os.path.join(os.path.expanduser("~"), "SensDSv2_data")
-        folder = self._save_dir if self._save_dir and os.path.exists(
-            self._save_dir) else base_dir
-        os.makedirs(folder, exist_ok=True)
+        os.makedirs(base_dir, exist_ok=True)
         import subprocess, sys
         if sys.platform == "darwin":
-            subprocess.Popen(["open", folder])
+            subprocess.Popen(["open", base_dir])
         elif sys.platform == "win32":
-            subprocess.Popen(["explorer", folder])
+            subprocess.Popen(["explorer", base_dir])
         else:
-            subprocess.Popen(["xdg-open", folder])
+            subprocess.Popen(["xdg-open", base_dir])

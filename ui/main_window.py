@@ -2,6 +2,7 @@ import sys
 import os
 import numpy as np
 from PyQt6 import QtWidgets, QtCore, QtGui
+from ui import app_colors
 from ui.spectrogram_widget import SpectrogramWidget
 from ui.collect_tab import CollectTab
 from core.radar import RadarStream
@@ -16,34 +17,36 @@ HINTS = [
     "Positive velocity = moving toward the radar. Negative = moving away.",
 ]
 
-APP_STYLE = """
-    QMainWindow { background-color: #f0f2f5; }
 
-    /* Top bar */
-    QWidget#topbar {
+def _app_style(c: dict) -> str:
+    return f"""
+    QMainWindow {{ background-color: {c['bg']}; }}
+
+    /* Top bar — always dark blue regardless of theme */
+    QWidget#topbar {{
         background-color: #1a3a5c;
-    }
-    QLabel#app_title {
+    }}
+    QLabel#app_title {{
         font-size: 15px;
         font-weight: bold;
         color: #ffffff;
-    }
-    QLabel#status_label {
+    }}
+    QLabel#status_label {{
         font-size: 12px;
         color: #aac4e0;
-    }
-    QLabel#timer_label {
+    }}
+    QLabel#timer_label {{
         font-size: 13px;
         font-weight: bold;
         color: #ffffff;
         font-family: monospace;
-    }
-    QLabel#hint_label {
+    }}
+    QLabel#hint_label {{
         font-size: 12px;
         color: #aac4e0;
         font-style: italic;
-    }
-    QPushButton#connect_btn {
+    }}
+    QPushButton#connect_btn {{
         background-color: #27ae60;
         color: white;
         border: none;
@@ -51,9 +54,9 @@ APP_STYLE = """
         padding: 6px 14px;
         font-size: 12px;
         font-weight: bold;
-    }
-    QPushButton#connect_btn:hover { background-color: #2ecc71; }
-    QPushButton#disconnect_btn {
+    }}
+    QPushButton#connect_btn:hover {{ background-color: #2ecc71; }}
+    QPushButton#disconnect_btn {{
         background-color: #c0392b;
         color: white;
         border: none;
@@ -61,40 +64,40 @@ APP_STYLE = """
         padding: 6px 14px;
         font-size: 12px;
         font-weight: bold;
-    }
-    QPushButton#disconnect_btn:hover { background-color: #e74c3c; }
-    QLabel#error_label {
+    }}
+    QPushButton#disconnect_btn:hover {{ background-color: #e74c3c; }}
+    QLabel#error_label {{
         font-size: 12px;
         color: #f1948a;
-    }
+    }}
 
     /* Tabs */
-    QTabWidget::pane {
+    QTabWidget::pane {{
         border: none;
-        background: #f0f2f5;
-    }
-    QTabBar {
-        background: #f0f2f5;
-    }
-    QTabBar::tab {
-        background: #f0f2f5;
-        color: #666;
+        background: {c['bg']};
+    }}
+    QTabBar {{
+        background: {c['bg']};
+    }}
+    QTabBar::tab {{
+        background: {c['bg']};
+        color: {c['subtext']};
         padding: 11px 0px;
         font-size: 13px;
         border: none;
         border-bottom: 3px solid transparent;
         min-width: 120px;
-    }
-    QTabBar::tab:selected {
-        color: #1a3a5c;
+    }}
+    QTabBar::tab:selected {{
+        color: {c['accent']};
         font-weight: bold;
-        border-bottom: 3px solid #1a3a5c;
-        background: #f0f2f5;
-    }
-    QTabBar::tab:hover {
-        color: #1a3a5c;
-        background: #e2e8f0;
-    }
+        border-bottom: 3px solid {c['accent']};
+        background: {c['bg']};
+    }}
+    QTabBar::tab:hover {{
+        color: {c['accent']};
+        background: {c['tab_hover']};
+    }}
 """
 
 
@@ -132,7 +135,8 @@ class RadarBridge(QtCore.QObject):
 class PlaceholderTab(QtWidgets.QWidget):
     def __init__(self, title, description, icon="🔒"):
         super().__init__()
-        self.setStyleSheet("background: #f0f2f5;")
+        c = app_colors()
+        self.setStyleSheet(f"background: {c['bg']};")
         layout = QtWidgets.QVBoxLayout(self)
         layout.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
         layout.setSpacing(12)
@@ -144,13 +148,13 @@ class PlaceholderTab(QtWidgets.QWidget):
 
         title_label = QtWidgets.QLabel(title)
         title_label.setStyleSheet(
-            "font-size: 22px; font-weight: bold; color: #1a3a5c;"
+            f"font-size: 22px; font-weight: bold; color: {c['accent']};"
         )
         title_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(title_label)
 
         desc_label = QtWidgets.QLabel(description)
-        desc_label.setStyleSheet("font-size: 14px; color: #888;")
+        desc_label.setStyleSheet(f"font-size: 14px; color: {c['faint']};")
         desc_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
         desc_label.setWordWrap(True)
         desc_label.setMaximumWidth(420)
@@ -166,7 +170,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._connected = False
         self._elapsed = 0
         self._hint_index = 0
-        self.setStyleSheet(APP_STYLE)
+        self.setStyleSheet(_app_style(app_colors()))
         self._setup_ui()
         self._setup_timers()
 
