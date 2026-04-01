@@ -369,6 +369,11 @@ class ConfidenceBarsWidget(QtWidgets.QWidget):
 # ─── main tab ────────────────────────────────────────────────────────────────
 
 class TestTab(QtWidgets.QWidget):
+    # emits (gesture: str, confidence: float, threshold: float)
+    prediction_made = QtCore.pyqtSignal(str, float, float)
+    # emits (model_name: str, classes: list) when a model is loaded
+    model_loaded = QtCore.pyqtSignal(str, list)
+
     def __init__(self):
         super().__init__()
         self.setObjectName("test_root")
@@ -623,6 +628,7 @@ class TestTab(QtWidgets.QWidget):
             self._rs_start_btn.setEnabled(True)
             self._status.setText(f"Loaded — {len(self._id2label)} classes")
             self._field.reset()
+            self.model_loaded.emit(name, class_names)
         except Exception as e:
             self._model = None
             self._hf_processor = None
@@ -749,6 +755,9 @@ class TestTab(QtWidgets.QWidget):
         best = max(probs, key=probs.get)
         conf = probs[best]
 
+        threshold = self._conf_threshold.value()
+        self.prediction_made.emit(best, conf, threshold)
+
         if mode == "single":
             self._status.setText(f"✓  {best}  ({conf:.0%})")
             self._status.setStyleSheet(
@@ -757,7 +766,7 @@ class TestTab(QtWidgets.QWidget):
             self._animate_single(best)
 
         elif mode == "robosoccer":
-            if conf >= self._conf_threshold.value():
+            if conf >= threshold:
                 self._apply_rs_gesture(best)
 
     def _on_inference_error(self, msg):

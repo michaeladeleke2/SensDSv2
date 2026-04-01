@@ -7,6 +7,7 @@ from ui.spectrogram_widget import SpectrogramWidget
 from ui.collect_tab import CollectTab
 from ui.train_tab import TrainTab
 from ui.test_tab import TestTab
+from ui.results_tab import ResultsTab
 from core.radar import RadarStream
 from core.processing import SpectrogramProcessor
 
@@ -281,17 +282,18 @@ class MainWindow(QtWidgets.QMainWindow):
         self._test_tab = TestTab()
         self._tabs.addTab(self._test_tab, "✋   Test")
 
-        self._tabs.addTab(PlaceholderTab(
-            "Results",
-            "View your model accuracy, confusion matrix, and prediction history.",
-            "📊"
-        ), "📊   Results")
+        self._results_tab = ResultsTab()
+        self._tabs.addTab(self._results_tab, "📊   Results")
 
         self._tabs.addTab(PlaceholderTab(
             "RoboSoccer",
             "Control the VEX AIM robot using your trained gesture model.",
             "🤖"
         ), "🤖   RoboSoccer")
+
+        # Wire test → results live updates
+        self._test_tab.prediction_made.connect(self._results_tab.add_prediction)
+        self._test_tab.model_loaded.connect(self._results_tab.set_model_info)
 
         self._tabs.tabBarClicked.connect(self._on_tab_clicked)
         return self._tabs
@@ -313,6 +315,11 @@ class MainWindow(QtWidgets.QMainWindow):
                 self._test_tab.refresh()
                 return
             self._show_soft_lock("Train a model first before testing.")
+            return
+        if index == 4:
+            if self._test_tab._model is not None:
+                return
+            self._show_soft_lock("Test your model first before viewing results.")
             return
         self._show_soft_lock(
             "Complete the previous steps first — this tab will unlock as you progress."
