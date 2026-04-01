@@ -530,15 +530,18 @@ class TestTab(QtWidgets.QWidget):
         layout.addStretch()
 
         layout.addWidget(HintCard([
-            "Single Prediction: capture one gesture window and see "
-            "the model's confidence for every class.",
-            "RoboSoccer: the model runs live — swipe left/right to steer, "
-            "push to accelerate, idle to coast.",
-            "Confidence threshold: the model must be at least this sure "
-            "before steering the robot. Lower it if the robot feels unresponsive.",
-            "The bars show probability per class. A sharp peak means a confident prediction.",
-            "If predictions are wrong, collect more samples of that gesture and retrain.",
-            "The robot wraps around the field edges — try to score a goal!",
+            "Single Prediction: do a gesture, hit Capture — "
+            "the model will tell you what it thinks you did and how sure it is.",
+            "RoboSoccer mode: the model watches you continuously. "
+            "Swipe left/right to steer the robot, push to speed it up, idle to cruise.",
+            "Confidence: a percentage showing how sure the model is. "
+            "90%+ means it's very confident. Below 40% means it's basically guessing.",
+            "Confidence threshold: the robot only reacts if the model is at least this confident. "
+            "Lower it if the robot seems stuck; raise it to reduce false moves.",
+            "The bar chart shows every gesture's score at once. "
+            "One tall bar = the model is confident. Lots of equal bars = confused.",
+            "Getting wrong predictions? Go back to Collect, "
+            "add more samples for that gesture, then retrain.",
         ]))
 
         self._status = QtWidgets.QLabel("")

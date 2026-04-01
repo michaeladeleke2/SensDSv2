@@ -540,9 +540,10 @@ class TrainTab(QtWidgets.QWidget):
         self._epochs.setRange(1, 50)
         self._epochs.setValue(15)
         self._epochs.setToolTip(
-            "One epoch = one full pass through all training samples.\n"
-            "More epochs can improve accuracy but risk overfitting.\n"
-            "15 is a good starting point for small gesture datasets."
+            "An epoch is one full run through all your samples.\n"
+            "Think of it like rereading your notes before a test — the more\n"
+            "times you review, the more the model remembers (up to a point).\n"
+            "15 is a solid starting number for most gesture projects."
         )
         row_epochs.addWidget(self._epochs)
         layout.addLayout(row_epochs)
@@ -553,9 +554,10 @@ class TrainTab(QtWidgets.QWidget):
         self._batch_size.setRange(1, 64)
         self._batch_size.setValue(8)
         self._batch_size.setToolTip(
-            "How many samples the model sees before updating its weights.\n"
-            "Smaller batches (4–8) work well for small datasets.\n"
-            "Larger batches train faster but need more memory."
+            "Batch size = how many samples the model studies at once\n"
+            "before it adjusts itself. It's like grading 8 quizzes at a time\n"
+            "instead of one at a time — faster but uses more memory.\n"
+            "Keep it at 8 for small datasets; increase it if you have 200+ samples."
         )
         row_batch.addWidget(self._batch_size)
         layout.addLayout(row_batch)
@@ -568,10 +570,10 @@ class TrainTab(QtWidgets.QWidget):
         self._lr.setSingleStep(0.00001)
         self._lr.setValue(0.00002)
         self._lr.setToolTip(
-            "Controls how big each weight update step is.\n"
-            "Too high → unstable training (loss spikes).\n"
-            "Too low → very slow learning.\n"
-            "2e-5 (0.00002) is a proven default for fine-tuning ViT."
+            "Learning rate controls how fast the model adjusts after a mistake.\n"
+            "Too high → it overcorrects and goes haywire (loss shoots up).\n"
+            "Too low → it barely changes, like studying 1 word per hour.\n"
+            "0.00002 is the sweet spot that works for almost every gesture project."
         )
         row_lr.addWidget(self._lr)
         layout.addLayout(row_lr)
@@ -582,9 +584,10 @@ class TrainTab(QtWidgets.QWidget):
         self._val_subjects.setRange(1, 10)
         self._val_subjects.setValue(1)
         self._val_subjects.setToolTip(
-            "Number of students held out from training to test the model.\n"
-            "Their data is never seen during training — this gives an honest\n"
-            "accuracy score. Higher = fairer test, less training data."
+            "Val subjects = how many students are kept secret from the model\n"
+            "during training and used only for the final accuracy test.\n"
+            "It's like having a classmate quiz you on new questions — not\n"
+            "the ones you already practiced. Keeps the score fair and honest."
         )
         row_val.addWidget(self._val_subjects)
         layout.addLayout(row_val)
@@ -615,17 +618,21 @@ class TrainTab(QtWidgets.QWidget):
         layout.addStretch()
 
         layout.addWidget(HintCard([
-            "Epochs: one full pass through all your samples. "
-            "Watch the chart — stop early if val loss starts rising.",
-            "Batch size: samples seen before each weight update. "
-            "Keep it at 8 for small datasets; increase if training is slow.",
-            "Learning rate: step size for weight updates. "
-            "Too high = chaotic loss. Too low = barely learning. 0.00002 is safe.",
-            "Val subjects: students held out for testing. "
-            "Their gestures are never shown during training — the accuracy score is honest.",
-            "F1 score (orange) is more reliable than accuracy when gesture classes are uneven.",
-            "If accuracy plateaus early, try collecting more samples or increasing epochs.",
-            "The model is fine-tuning a Vision Transformer (ViT) pre-trained on millions of images.",
+            "Epochs: one full run through all your samples. "
+            "More = more practice for the model. Watch the chart — "
+            "if the orange line stops climbing, it's done learning.",
+            "Batch size: how many samples the model sees at once before updating. "
+            "8 is great for small datasets. Think of it like studying in groups of 8.",
+            "Learning rate: how big a step the model takes when it makes a mistake. "
+            "0.00002 is the sweet spot — don't change it unless things go wrong.",
+            "Val subjects: classmates kept secret from the model during training. "
+            "Their data is used only to check if the model actually learned — not to cheat.",
+            "Green accuracy line rising = model is getting smarter. "
+            "Orange F1 line is more trustworthy when you have unequal numbers of each gesture.",
+            "Training can take several minutes — let it run! "
+            "The chart updates after each epoch so you can watch progress live.",
+            "The model learns from spectrogram images — "
+            "it's basically learning to read radar pictures of your hand movements.",
         ], c=self._c))
 
         self._train_btn = QtWidgets.QPushButton("▶  Start Training")

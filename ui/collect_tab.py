@@ -319,18 +319,18 @@ class CollectTab(QtWidgets.QWidget):
         layout.addWidget(self._divider())
 
         layout.addWidget(HintCard([
-            "Enter your name and gesture label, then click Start "
-            "to begin collecting samples.",
-            "Consistency matters — keep the same speed, distance, "
-            "and hand position for every sample.",
-            "Collect at least 25 samples per gesture per person "
-            "for good model accuracy.",
-            "The delay between samples gives you time to reset "
-            "your position before the next capture.",
-            "Each sample is saved as both a .npy (raw data) and "
-            "a .png (image) — the PNG is what the model trains on.",
-            "Try a few different people collecting data — the model "
-            "generalises better across users.",
+            "Type your name and pick a gesture, then hit Start — "
+            "the radar will count down before each recording.",
+            "Do the same move every time: same speed, same hand height, "
+            "same distance from the sensor. Repetition = better data.",
+            "Aim for at least 25 samples per gesture. "
+            "More samples = smarter model!",
+            "The delay timer between samples gives you a moment "
+            "to reset before the next countdown.",
+            "Each recording is automatically saved. "
+            "Come back later and add more — it picks up where you left off.",
+            "Have a few different people record data too — "
+            "the model will work better for everyone, not just you.",
         ], c=self._c))
 
         self._progress_bar = QtWidgets.QProgressBar()
