@@ -44,12 +44,19 @@ python main.py
 SensDSv2/
 ├── main.py                      # Entry point
 ├── requirements.txt             # Pip dependencies
+├── assets/
+│   ├── SensDSLogo.png           # App logo
+│   ├── SensDSLogo.ico           # Windows icon
+│   └── SensDSLogo.icns          # macOS icon
 ├── core/
 │   ├── radar.py                 # Radar connection and streaming
 │   └── processing.py            # Signal processing pipeline
 └── ui/
-    ├── main_window.py           # Main application window
-    └── spectrogram_widget.py    # Live spectrogram display
+    ├── main_window.py           # Main application window and tab container
+    ├── spectrogram_widget.py    # Live spectrogram display
+    ├── collect_tab.py           # Gesture data collection
+    ├── train_tab.py             # ViT model training
+    └── test_tab.py              # Model testing and robot simulation
 ```
 
 ---
@@ -74,26 +81,42 @@ SensDSv2/
 
 ### Step 4 — ui/spectrogram_widget.py
 - pyqtgraph ImageItem with rolling buffer for live scrolling display
-- Jet colormap manually defined to match v1 and published paper figures
+- Jet colormap manually defined to match v1
+- `DB_MIN=-20` clips noise floor so gestures stand out
+- `gaussian_filter(sigma=[2.0, 1.5])` smooths across frequency and time axes
 - Velocity axis: ±2.46 m/s derived from PRF=2000 Hz, wavelength=4.92mm (61 GHz)
-- Key parameters: NOVERLAP=248, DB_MIN=-20, BUFFER_WIDTH=400, gaussian_filter sigma=[2.0, 1.5]
-- Must accumulate 10 frames before first output (deque buffer in SpectrogramProcessor)
-- RadarBridge uses pyqtSignal to safely pass data from radar thread to GUI thread
+- RadarBridge uses `pyqtSignal` to safely pass data from radar thread to GUI thread
 - Verified: matches micro-Doppler spectrogram style from Gurbuz et al. TAES/Radar Conference papers
 
 ### Step 5 — ui/main_window.py + ui/collect_tab.py
-- Replaced sidebar with compact dark top bar (logo, status, timer, connect/disconnect)
+- Dark top bar with logo, connection status, session timer, connect/disconnect
 - Full-width tab bar: Visualize, Collect, Train, Test, Results, RoboSoccer
-- Tabs 3-6 are soft-locked placeholders — warning shown but still accessible
-- RadarBridge emits two signals: `frame_ready` (processed spectrogram) and `raw_frame_ready` (raw frames for collect tab)
+- Tabs 4-6 are soft-locked placeholders
+- RadarBridge emits two signals: `frame_ready` (processed spectrogram) and `raw_frame_ready` (raw frames)
 - Collect tab: student name → personal data folder, gesture dropdown with custom label option
 - Batch collection: countdown → capture → preview → save, repeats per sample count
 - Saves both `.npy` (raw spectrogram) and `.png` (jet colormap, 400×300, for ViT training)
-- Preview uses same pyqtgraph plot style as live display with calibrated velocity/time axes
 - Open Data Folder button works on Mac and Windows
 - Verified on macOS (arm64) and Windows (x86_64)
 
----
+### Step 6 — ui/train_tab.py
+- Scans `~/SensDSv2_data/` for gesture classes and sample counts
+- Unlocks when ≥3 gesture classes and ≥20 total PNG samples are found
+- Student selection: train on all students or select specific ones
+- Training mode: Fast (head only, ~1 min on CPU) or Full fine-tune (~5-10 min)
+- Fine-tunes `google/vit-base-patch16-224` via Hugging Face `transformers`
+- Runs training on QThread — live loss/accuracy chart + log text update per epoch
+- Auto-detects device: CUDA → MPS → CPU
+- Saves trained model to `~/SensDSv2_data/models/` as a Hugging Face model directory
+
+### Step 7 — ui/test_tab.py
+- Requires a trained model directory to be loaded before use
+- Loads models using `AutoModelForImageClassification.from_pretrained` and `AutoImageProcessor.from_pretrained`
+- Two modes: Single Prediction (capture one gesture → predict → robot animates) and RoboSoccer (continuous streaming → real-time robot steering)
+- Top-down 2D soccer field drawn with QPainter — robot moves, steers, and trails
+- Gesture → robot mapping: swipe_left = turn left, swipe_right = turn right, push = speed burst, idle = no change
+- Confidence bars show per-class probabilities after each prediction
+- All inference runs on QThread
 
 ## Concepts Reference
 

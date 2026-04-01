@@ -4,9 +4,11 @@ __pycache__/
 .DS_Store
 *.whl
 *.egg-info/
-dist/
 build/
 .env
-.claude
+.zipbuild/
+dist/
+tmp.iconset/
+inf_wheel/
+.claude/
 *.spec
-.zip
