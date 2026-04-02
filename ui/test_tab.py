@@ -369,8 +369,8 @@ class ConfidenceBarsWidget(QtWidgets.QWidget):
 # ─── main tab ────────────────────────────────────────────────────────────────
 
 class TestTab(QtWidgets.QWidget):
-    # emits (gesture: str, confidence: float, threshold: float)
-    prediction_made = QtCore.pyqtSignal(str, float, float)
+    # emits (gesture: str, confidence: float, threshold: float, actual: str | None)
+    prediction_made = QtCore.pyqtSignal(str, float, float, object)
     # emits (model_name: str, classes: list) when a model is loaded
     model_loaded = QtCore.pyqtSignal(str, list)
 
@@ -399,6 +399,11 @@ class TestTab(QtWidgets.QWidget):
         self._anim_timer = None
         self._anim_steps = 0
         self._anim_step_px = 0.0
+
+        # pending single-prediction state (awaiting confirmation)
+        self._pending_gesture = ""
+        self._pending_conf = 0.0
+        self._pending_threshold = 0.0
 
         self._setup_ui()
 
@@ -550,7 +555,96 @@ class TestTab(QtWidgets.QWidget):
         self._status.setMinimumHeight(40)
         layout.addWidget(self._status)
 
+        layout.addWidget(self._build_confirm_widget())
+
         return panel
+
+    def _build_confirm_widget(self):
+        """Inline confirmation row shown after each Single Prediction."""
+        self._confirm_widget = QtWidgets.QFrame()
+        self._confirm_widget.setStyleSheet("""
+            QFrame {
+                background: #fffbee;
+                border: 1px solid #f0c84a;
+                border-radius: 6px;
+            }
+            QLabel { border: none; }
+        """)
+        cl = QtWidgets.QVBoxLayout(self._confirm_widget)
+        cl.setContentsMargins(10, 8, 10, 8)
+        cl.setSpacing(6)
+
+        q_lbl = QtWidgets.QLabel("What gesture did you actually perform?")
+        q_lbl.setStyleSheet(
+            "font-size: 12px; font-weight: bold; color: #5a4000;"
+        )
+        q_lbl.setWordWrap(True)
+        cl.addWidget(q_lbl)
+
+        # Button container — rebuilt when a model loads
+        self._confirm_btns_widget = QtWidgets.QWidget()
+        self._confirm_btns_widget.setStyleSheet("background: transparent;")
+        self._confirm_btns_layout = QtWidgets.QGridLayout(self._confirm_btns_widget)
+        self._confirm_btns_layout.setContentsMargins(0, 0, 0, 0)
+        self._confirm_btns_layout.setSpacing(4)
+        cl.addWidget(self._confirm_btns_widget)
+
+        self._confirm_widget.setVisible(False)
+        return self._confirm_widget
+
+    def _rebuild_confirm_buttons(self, class_names: list):
+        """Recreate the per-class + Skip buttons (called after model load)."""
+        # Remove old widgets
+        while self._confirm_btns_layout.count():
+            item = self._confirm_btns_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        all_btns = list(class_names) + ["Skip"]
+        cols = min(3, len(all_btns))
+        for idx, name in enumerate(all_btns):
+            is_skip = (name == "Skip")
+            btn = QtWidgets.QPushButton(name.replace("_", " ") if not is_skip else "Skip")
+            if is_skip:
+                btn.setStyleSheet("""
+                    QPushButton {
+                        background: #f5f5f5;
+                        border: 1px solid #ccc;
+                        border-radius: 4px;
+                        padding: 4px 8px;
+                        font-size: 11px;
+                        color: #888;
+                    }
+                    QPushButton:hover { background: #ececec; }
+                """)
+                btn.clicked.connect(lambda: self._on_confirm(None))
+            else:
+                btn.setStyleSheet("""
+                    QPushButton {
+                        background: white;
+                        border: 1px solid #1a3a5c;
+                        border-radius: 4px;
+                        padding: 4px 8px;
+                        font-size: 11px;
+                        color: #1a3a5c;
+                    }
+                    QPushButton:hover { background: #e8f0fb; }
+                """)
+                btn.clicked.connect(
+                    lambda checked, g=name: self._on_confirm(g)
+                )
+            row, col = divmod(idx, cols)
+            self._confirm_btns_layout.addWidget(btn, row, col)
+
+    def _on_confirm(self, actual):
+        """Called when student picks their actual gesture or clicks Skip."""
+        self._confirm_widget.setVisible(False)
+        self.prediction_made.emit(
+            self._pending_gesture,
+            self._pending_conf,
+            self._pending_threshold,
+            actual,
+        )
 
     def _build_right(self):
         panel = QtWidgets.QWidget()
@@ -631,6 +725,8 @@ class TestTab(QtWidgets.QWidget):
             self._rs_start_btn.setEnabled(True)
             self._status.setText(f"Loaded — {len(self._id2label)} classes")
             self._field.reset()
+            self._rebuild_confirm_buttons(class_names)
+            self._confirm_widget.setVisible(False)
             self.model_loaded.emit(name, class_names)
         except Exception as e:
             self._model = None
@@ -757,18 +853,23 @@ class TestTab(QtWidgets.QWidget):
         self._bars.set_probs(probs)
         best = max(probs, key=probs.get)
         conf = probs[best]
-
         threshold = self._conf_threshold.value()
-        self.prediction_made.emit(best, conf, threshold)
 
         if mode == "single":
+            # Store pending prediction — emit only after student confirms
+            self._pending_gesture = best
+            self._pending_conf = conf
+            self._pending_threshold = threshold
             self._status.setText(f"✓  {best}  ({conf:.0%})")
             self._status.setStyleSheet(
                 "color: #27ae60; font-size: 16px; font-weight: bold;"
             )
             self._animate_single(best)
+            self._confirm_widget.setVisible(True)
 
         elif mode == "robosoccer":
+            # RoboSoccer always logs without actual label
+            self.prediction_made.emit(best, conf, threshold, None)
             if conf >= threshold:
                 self._apply_rs_gesture(best)
 

@@ -86,7 +86,6 @@ SensDSv2/
 - `gaussian_filter(sigma=[2.0, 1.5])` smooths across frequency and time axes
 - Velocity axis: ±2.46 m/s derived from PRF=2000 Hz, wavelength=4.92mm (61 GHz)
 - RadarBridge uses `pyqtSignal` to safely pass data from radar thread to GUI thread
-- Verified: matches micro-Doppler spectrogram style from Gurbuz et al. TAES/Radar Conference papers
 
 ### Step 5 — ui/main_window.py + ui/collect_tab.py
 - Dark top bar with logo, connection status, session timer, connect/disconnect

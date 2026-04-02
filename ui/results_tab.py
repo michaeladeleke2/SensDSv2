@@ -352,11 +352,16 @@ class ResultsTab(QtWidgets.QWidget):
         self._export_btn.setEnabled(False)
         self._clear_btn.setEnabled(False)
 
-    def add_prediction(self, gesture: str, confidence: float, threshold: float):
+    def add_prediction(self, gesture: str, confidence: float, threshold: float,
+                       actual=None):
         dt = datetime.datetime.now()
-        self._history.append((dt, gesture, confidence, threshold))
-        self._matrix.record(gesture, gesture)
-        self._acc_bars.record(gesture, gesture)
+        self._history.append((dt, gesture, confidence, threshold, actual))
+
+        # Confusion matrix and accuracy bars only update when the student
+        # confirmed their actual gesture (Single Prediction mode only).
+        if actual is not None:
+            self._matrix.record(actual, gesture)
+            self._acc_bars.record(actual, gesture)
 
         row = self._table.rowCount()
         self._table.insertRow(row)
@@ -375,12 +380,14 @@ class ResultsTab(QtWidgets.QWidget):
 
         ok = confidence >= threshold
         center = QtCore.Qt.AlignmentFlag.AlignCenter
+        actual_text = actual.replace("_", " ") if actual else "—"
 
         self._table.setItem(row, 0, _item(dt.strftime("%H:%M:%S"), center))
         self._table.setItem(row, 1,
             _item(gesture.replace("_", " "), color="#1a3a5c", bold=True))
         self._table.setItem(row, 2, _item(f"{confidence:.1%}", center))
-        self._table.setItem(row, 3,
+        self._table.setItem(row, 3, _item(actual_text, center))
+        self._table.setItem(row, 4,
             _item("✓  Confident" if ok else "⚠  Low", center,
                   "#27ae60" if ok else "#e67e22"))
 
@@ -389,7 +396,7 @@ class ResultsTab(QtWidgets.QWidget):
         self._clear_btn.setEnabled(True)
 
         n = len(self._history)
-        above = sum(1 for _, _, c, t in self._history if c >= t)
+        above = sum(1 for _, _, c, t, _ in self._history if c >= t)
         self._summary_lbl.setText(
             f"{n} prediction{'s' if n != 1 else ''}  —  "
             f"{above} confident  ({above / n:.0%})"
@@ -446,6 +453,9 @@ class ResultsTab(QtWidgets.QWidget):
         cf_layout.addWidget(_section_label("Confusion Matrix"))
         cf_layout.addWidget(_sub_label(
             "Each row is what you actually did · each column is what the model guessed"
+        ))
+        cf_layout.addWidget(_sub_label(
+            "Populated from Single Prediction mode only."
         ))
         self._matrix = ConfusionMatrixWidget()
         cf_layout.addWidget(self._matrix, 1)
@@ -506,9 +516,9 @@ class ResultsTab(QtWidgets.QWidget):
 
         layout.addLayout(header)
 
-        self._table = QtWidgets.QTableWidget(0, 4)
+        self._table = QtWidgets.QTableWidget(0, 5)
         self._table.setHorizontalHeaderLabels(
-            ["Time", "Gesture", "Confidence", "Result"]
+            ["Time", "Predicted", "Confidence", "Actual", "Result"]
         )
         hh = self._table.horizontalHeader()
         hh.setStretchLastSection(False)
@@ -516,6 +526,7 @@ class ResultsTab(QtWidgets.QWidget):
         hh.setSectionResizeMode(1, QtWidgets.QHeaderView.ResizeMode.Stretch)
         hh.setSectionResizeMode(2, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
         hh.setSectionResizeMode(3, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
+        hh.setSectionResizeMode(4, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
         self._table.setEditTriggers(
             QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
         self._table.setSelectionBehavior(
@@ -546,12 +557,16 @@ class ResultsTab(QtWidgets.QWidget):
         try:
             with open(path, "w", newline="") as f:
                 w = csv.writer(f)
-                w.writerow(["timestamp", "gesture", "confidence", "above_threshold"])
-                for dt, gesture, conf, thr in self._history:
+                w.writerow([
+                    "timestamp", "predicted", "confidence",
+                    "actual", "above_threshold"
+                ])
+                for dt, gesture, conf, thr, actual in self._history:
                     w.writerow([
                         dt.strftime("%Y-%m-%d %H:%M:%S"),
                         gesture,
                         f"{conf:.4f}",
+                        actual if actual else "",
                         "yes" if conf >= thr else "no",
                     ])
             QtWidgets.QMessageBox.information(self, "Exported", f"Saved to:\n{path}")
