@@ -3,11 +3,13 @@ import os
 import numpy as np
 from PyQt6 import QtWidgets, QtCore, QtGui
 from ui import app_colors
+from ui.gamification import GamificationManager, GamificationBar
 from ui.spectrogram_widget import SpectrogramWidget
 from ui.collect_tab import CollectTab
 from ui.train_tab import TrainTab
 from ui.test_tab import TestTab
 from ui.results_tab import ResultsTab
+from ui.vex_aim_tab import VexAimTab
 from core.radar import RadarStream
 from core.processing import SpectrogramProcessor
 
@@ -30,22 +32,22 @@ def _app_style(c: dict) -> str:
         background-color: #1a3a5c;
     }}
     QLabel#app_title {{
-        font-size: 15px;
+        font-size: 24px;
         font-weight: bold;
         color: #ffffff;
     }}
     QLabel#status_label {{
-        font-size: 12px;
+        font-size: 17px;
         color: #aac4e0;
     }}
     QLabel#timer_label {{
-        font-size: 13px;
+        font-size: 19px;
         font-weight: bold;
         color: #ffffff;
         font-family: monospace;
     }}
     QLabel#hint_label {{
-        font-size: 12px;
+        font-size: 16px;
         color: #aac4e0;
         font-style: italic;
     }}
@@ -53,9 +55,9 @@ def _app_style(c: dict) -> str:
         background-color: #27ae60;
         color: white;
         border: none;
-        border-radius: 5px;
-        padding: 6px 14px;
-        font-size: 12px;
+        border-radius: 8px;
+        padding: 12px 28px;
+        font-size: 17px;
         font-weight: bold;
     }}
     QPushButton#connect_btn:hover {{ background-color: #2ecc71; }}
@@ -63,14 +65,14 @@ def _app_style(c: dict) -> str:
         background-color: #c0392b;
         color: white;
         border: none;
-        border-radius: 5px;
-        padding: 6px 14px;
-        font-size: 12px;
+        border-radius: 8px;
+        padding: 12px 28px;
+        font-size: 17px;
         font-weight: bold;
     }}
     QPushButton#disconnect_btn:hover {{ background-color: #e74c3c; }}
     QLabel#error_label {{
-        font-size: 12px;
+        font-size: 16px;
         color: #f1948a;
     }}
 
@@ -85,16 +87,16 @@ def _app_style(c: dict) -> str:
     QTabBar::tab {{
         background: {c['bg']};
         color: {c['subtext']};
-        padding: 11px 0px;
-        font-size: 13px;
+        padding: 20px 0px;
+        font-size: 17px;
         border: none;
-        border-bottom: 3px solid transparent;
-        min-width: 120px;
+        border-bottom: 4px solid transparent;
+        min-width: 160px;
     }}
     QTabBar::tab:selected {{
         color: {c['accent']};
         font-weight: bold;
-        border-bottom: 3px solid {c['accent']};
+        border-bottom: 4px solid {c['accent']};
         background: {c['bg']};
     }}
     QTabBar::tab:hover {{
@@ -177,14 +179,17 @@ class MainWindow(QtWidgets.QMainWindow):
         super().__init__()
         self.setWindowTitle("SensDSv2 — Sensing for Data Science")
         self.setWindowIcon(QtGui.QIcon(resource_path("assets/SensDSLogo.png")))
-        self.resize(1200, 700)
+        self.resize(1200, 740)
         self._bridge = None
         self._connected = False
         self._elapsed = 0
         self._hint_index = 0
+        self._gamification_mgr = GamificationManager(self)
         self.setStyleSheet(_app_style(app_colors()))
         self._setup_ui()
         self._setup_timers()
+        # Let the toast overlay the full window (set after show so geometry is valid)
+        QtCore.QTimer.singleShot(0, self._init_gamification_toast)
 
     def _setup_ui(self):
         wrapper = QtWidgets.QWidget()
@@ -194,15 +199,20 @@ class MainWindow(QtWidgets.QMainWindow):
         main_layout.setSpacing(0)
 
         main_layout.addWidget(self._build_topbar())
+
+        # Gamification bar sits between the top bar and the tab content
+        self._gami_bar = GamificationBar(self._gamification_mgr, wrapper)
+        main_layout.addWidget(self._gami_bar)
+
         main_layout.addWidget(self._build_tabs())
 
     def _build_topbar(self):
         topbar = QtWidgets.QWidget()
         topbar.setObjectName("topbar")
-        topbar.setFixedHeight(56)
+        topbar.setFixedHeight(96)
         layout = QtWidgets.QHBoxLayout(topbar)
-        layout.setContentsMargins(16, 0, 16, 0)
-        layout.setSpacing(12)
+        layout.setContentsMargins(24, 0, 24, 0)
+        layout.setSpacing(20)
 
         # Logo
         logo_path = resource_path("assets/SensDSLogo.png")
@@ -210,15 +220,15 @@ class MainWindow(QtWidgets.QMainWindow):
             logo_container = QtWidgets.QLabel()
             logo_container.setStyleSheet("background: transparent;")
             pixmap = QtGui.QPixmap(logo_path).scaledToHeight(
-                52, QtCore.Qt.TransformationMode.SmoothTransformation
+                88, QtCore.Qt.TransformationMode.SmoothTransformation
             )
             logo_container.setPixmap(pixmap)
             logo_container.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
             # White glow so the dark-blue logo text pops off the dark topbar
             # without needing a background pill.
             glow = QtWidgets.QGraphicsDropShadowEffect()
-            glow.setBlurRadius(18)
-            glow.setColor(QtGui.QColor(255, 255, 255, 180))
+            glow.setBlurRadius(22)
+            glow.setColor(QtGui.QColor(255, 255, 255, 200))
             glow.setOffset(0, 0)
             logo_container.setGraphicsEffect(glow)
             layout.addWidget(logo_container)
@@ -285,18 +295,30 @@ class MainWindow(QtWidgets.QMainWindow):
         self._results_tab = ResultsTab()
         self._tabs.addTab(self._results_tab, "📊   Results")
 
+        self._vex_tab = VexAimTab()
+        self._tabs.addTab(self._vex_tab, "🤖   VEX AIM")
+
         self._tabs.addTab(PlaceholderTab(
-            "RoboSoccer",
-            "Control the VEX AIM robot using your trained gesture model.",
-            "🤖"
-        ), "🤖   RoboSoccer")
+            "Resources",
+            "Reference materials, gesture guides, and project documentation — coming soon.",
+            "📚"
+        ), "📚   Resources")
 
         # Wire test → results live updates
         self._test_tab.prediction_made.connect(self._results_tab.add_prediction)
         self._test_tab.model_loaded.connect(self._results_tab.set_model_info)
 
+        # Wire test tab → gamification manager
+        self._test_tab.gesture_tested.connect(self._gamification_mgr.on_prediction)
+        self._test_tab.soccer_gesture_applied.connect(self._gamification_mgr.on_soccer_gesture)
+        self._test_tab.maze_solved.connect(self._gamification_mgr.on_maze_solved)
+
         self._tabs.tabBarClicked.connect(self._on_tab_clicked)
         return self._tabs
+
+    def _init_gamification_toast(self):
+        """Attach the badge toast overlay to the central widget."""
+        self._gami_bar.set_toast_parent(self.centralWidget())
 
     def _on_tab_clicked(self, index):
         if index == 0 or index == 1:
@@ -320,6 +342,25 @@ class MainWindow(QtWidgets.QMainWindow):
             if self._test_tab._model is not None:
                 return
             self._show_soft_lock("Test your model first before viewing results.")
+            return
+        if index == 5:
+            models_root = os.path.join(os.path.expanduser("~"), "SensDSv2_data", "models")
+            has_model = (
+                os.path.isdir(models_root)
+                and any(
+                    os.path.isdir(os.path.join(models_root, d))
+                    for d in os.listdir(models_root)
+                    if not d.startswith(".")
+                )
+            ) if os.path.isdir(models_root) else False
+            if has_model:
+                return
+            self._show_soft_lock(
+                "Train and test a model before using VEX AIM."
+            )
+            return
+        if index == 6:
+            # Resources tab is always accessible
             return
         self._show_soft_lock(
             "Complete the previous steps first — this tab will unlock as you progress."
@@ -348,6 +389,8 @@ class MainWindow(QtWidgets.QMainWindow):
             self._bridge.frame_ready.connect(self._spectrogram.update_frame)
             self._bridge.raw_frame_ready.connect(self._collect_tab.on_raw_frame)
             self._bridge.raw_frame_ready.connect(self._test_tab.on_raw_frame)
+            self._bridge.raw_frame_ready.connect(self._vex_tab.on_raw_frame)
+            self._bridge.frame_ready.connect(self._vex_tab.on_spectrogram_frame)
             self._bridge.error_occurred.connect(self._on_radar_error)
             self._bridge.start()
             self._set_connected(True)

@@ -3,23 +3,21 @@ import pyqtgraph as pg
 from PyQt6 import QtCore, QtGui
 from scipy.ndimage import gaussian_filter
 
+# Pull ground-truth constants directly from the processing module so
+# there is only one place to change them.
+from core.processing import (
+    STFT_NFFT, COLS_PER_FRAME, DB_MIN, DB_MAX,
+    MAX_VELOCITY, FRAME_TIME_S,
+)
 
-DISPLAY_SECONDS = 5
-FREQ_BINS = 1024
+DISPLAY_SECONDS = 5   # seconds of rolling history to show
 
-# Radar / STFT parameters — must match core/processing.py and core/radar.py
-FRAME_TIME_S = 0.15   # cfg.frame_repetition_time_s
-_CHIRPS_PER_FRAME = 64
-_STFT_SHIFT = 8       # SHIFT = WINDOW - NOVERLAP in processing.py
-# Spectrogram columns produced per second of live radar data
-COLS_PER_SECOND = int(round(_CHIRPS_PER_FRAME / (FRAME_TIME_S * _STFT_SHIFT)))
-BUFFER_WIDTH = DISPLAY_SECONDS * COLS_PER_SECOND  # ~265 columns for 5 s
-DB_MIN = -20
-DB_MAX = 0
-
-PRF = 1.0 / 0.0005
-WAVELENGTH = 3e8 / 61e9
-MAX_VELOCITY = (PRF * WAVELENGTH) / 4  # ±2.46 m/s
+# ── Derived display constants ─────────────────────────────────────────────────
+# COLS_PER_FRAME (= 2) new STFT columns arrive every frame (0.1 s = 10 fps)
+# STFT_NFFT = 1024, STFT_SHIFT = 56, so COLS_PER_FRAME = 128 // 56 = 2
+FREQ_BINS        = STFT_NFFT                              # 1024 Doppler bins
+COLS_PER_SECOND  = int(round(COLS_PER_FRAME / FRAME_TIME_S))  # 2/0.1 = 20 cols/s
+BUFFER_WIDTH     = DISPLAY_SECONDS * COLS_PER_SECOND          # 100 cols = 5 s
 
 
 def make_jet_colormap():
@@ -88,5 +86,5 @@ class SpectrogramWidget(pg.GraphicsLayoutWidget):
             self._buffer[:, self._col] = col
             self._col = (self._col + 1) % BUFFER_WIDTH
         display = np.roll(self._buffer, -self._col, axis=1)
-        display = gaussian_filter(display.astype(np.float64), sigma=[2.0, 1.5]).astype(np.float32)
+        display = gaussian_filter(display.astype(np.float64), sigma=[1.5, 0.8]).astype(np.float32)
         self._img.setImage(display.T, autoLevels=False)

@@ -9,3 +9,4 @@ Pillow
 evaluate
 accelerate
 pyinstaller
+websocket-client>=1.9

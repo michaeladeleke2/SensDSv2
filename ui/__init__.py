@@ -1,4 +1,47 @@
 from PyQt6 import QtWidgets, QtGui, QtCore
+from ui.gamification import GamificationManager, GamificationBar, BadgeToast  # noqa: F401
+
+
+class HintCard(QtWidgets.QWidget):
+    """Rotating hint card that cycles through a list of tip strings."""
+
+    def __init__(self, hints: list, c: dict | None = None, interval_ms: int = 6000, parent=None):
+        super().__init__(parent)
+        self._hints = hints
+        self._index = 0
+
+        colors = c or {}
+        bg = colors.get("hint_bg", "#f0f4ff")
+        fg = colors.get("hint_text", "#888888")
+        border = colors.get("border", "#dddddd")
+
+        self.setAttribute(QtCore.Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setStyleSheet(
+            f"HintCard {{ background:{bg}; border:1px solid {border}; border-radius:6px; }}"
+        )
+
+        layout = QtWidgets.QHBoxLayout(self)
+        layout.setContentsMargins(10, 8, 10, 8)
+        layout.setSpacing(8)
+
+        icon = QtWidgets.QLabel("💡")
+        icon.setFixedWidth(20)
+        layout.addWidget(icon)
+
+        self._label = QtWidgets.QLabel(hints[0] if hints else "")
+        self._label.setWordWrap(True)
+        self._label.setStyleSheet(f"color:{fg}; background:transparent; border:none; font-size:12px;")
+        layout.addWidget(self._label, 1)
+
+        if len(hints) > 1:
+            self._timer = QtCore.QTimer(self)
+            self._timer.setInterval(interval_ms)
+            self._timer.timeout.connect(self._next_hint)
+            self._timer.start()
+
+    def _next_hint(self):
+        self._index = (self._index + 1) % len(self._hints)
+        self._label.setText(self._hints[self._index])
 
 
 def is_dark_mode() -> bool:
@@ -41,31 +84,3 @@ def app_colors() -> dict:
         hint_text='#888888',
         progress_bg='#e0e0e0',
     )
-
-
-class HintCard(QtWidgets.QLabel):
-    """Rotating hint label. Cycles through `hints` every `interval_ms` ms."""
-
-    def __init__(self, hints: list, c: dict | None = None,
-                 interval_ms: int = 7000, parent=None):
-        super().__init__(parent)
-        self._hints = hints
-        self._index = 0
-        self.setWordWrap(True)
-        colors = c or app_colors()
-        self.setStyleSheet(
-            f"font-size: 12px; color: {colors['hint_text']}; "
-            f"background: {colors['hint_bg']}; border-radius: 6px; padding: 10px;"
-        )
-        self._show()
-        if len(hints) > 1:
-            t = QtCore.QTimer(self)
-            t.timeout.connect(self._advance)
-            t.start(interval_ms)
-
-    def _advance(self):
-        self._index = (self._index + 1) % len(self._hints)
-        self._show()
-
-    def _show(self):
-        self.setText(f"💡  {self._hints[self._index]}")

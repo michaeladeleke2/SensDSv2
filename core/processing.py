@@ -1,74 +1,291 @@
+"""
+Radar signal processing — exact port of processing_utils.spectrogram()
+from the reference Gesture-Controlled-Robo-Soccer codebase.
+
+The spectrogram() function there is what was used to generate ALL training
+images.  We replicate it here step-for-step so that inference sees exactly
+the same representation the model was trained on.
+
+Reference algorithm (processing_utils.py):
+  1. Select antenna 0 only          data[:, 0, :, :]
+  2. Transpose + Fortran reshape    (n_sample, n_chirp*n_frame)
+  3. Zero-padded range FFT          fft(data, 2*n_sample)[n_sample:] / n_sample
+  4. Static clutter removal         subtract mean over slow-time
+  5. MTI highpass filter            Butterworth butter(1, 0.01, 'high') + lfilter
+  6. Range bin selection            np.arange(n_sample//2, n_sample-1)  [UPPER half]
+  7. Range integration              np.sum(rngpro[rBin, :], axis=0)
+  8. STFT                           Hanning window, nfft=1024, window=256, noverlap=200
+  9. FFT-shift + magnitude          np.abs(np.fft.fftshift(spect, 0))
+ 10. dB conversion                  20*log10(|spect|/max), display clipped at -20 dB
+
+Advisor-specified epoch/stride
+──────────────────────────────
+  Epoch  : 3 s  →  30 frames at 10 fps
+  Stride : 0.5 s →  5 frames
+"""
+
 import numpy as np
 from scipy.signal import butter, lfilter
 from collections import deque
 
 
-NFFT = 1024
-WINDOW = 256
-NOVERLAP = 248
-SHIFT = WINDOW - NOVERLAP
-FREQ_BINS = NFFT
-DB_MIN = -60
-DB_MAX = 0
-BUFFER_FRAMES = 10
+# ── Radar hardware constants  (cfg_simo_chirp.json + cfg_simo_seq.json) ───────
+N_CHIRPS         = 128
+N_SAMPLES        = 256
+N_ANTENNAS       = 3
+FRAME_TIME_S     = 0.10
+CHIRP_REP_TIME_S = 0.0002
+PRF              = 1.0 / CHIRP_REP_TIME_S          # 5 000 Hz
+FC_HZ            = (58.0e9 + 63.5e9) / 2           # ≈ 60.75 GHz
+WAVELENGTH       = 3e8 / FC_HZ                     # ≈ 4.94 mm
+MAX_VELOCITY     = (PRF * WAVELENGTH) / 4           # ≈ ±6.17 m/s
+
+# ── Epoch / stride (advisor-specified) ───────────────────────────────────────
+EPOCH_FRAMES     = 30     # 3 s at 10 fps
+STRIDE_FRAMES    = 5      # 0.5 s slide
+
+# ── STFT parameters — EXACT match to processing_utils.py ─────────────────────
+STFT_NFFT        = 1024   # nfft = 2**10
+STFT_WINDOW      = 256    # window
+STFT_NOVERLAP    = 200    # noverlap
+STFT_SHIFT       = STFT_WINDOW - STFT_NOVERLAP   # shift = 56
+
+# ── Derived STFT column counts ────────────────────────────────────────────────
+# Reference formula: n = (len(data) - window - 1) // shift
+EPOCH_CHIRPS     = EPOCH_FRAMES * N_CHIRPS         # 30 × 128 = 3840
+EPOCH_COLS       = (EPOCH_CHIRPS - STFT_WINDOW - 1) // STFT_SHIFT   # 63
+
+# New columns added per stride (5 frames × 128 chirps / 56 shift ≈ 11)
+STRIDE_CHIRPS    = STRIDE_FRAMES * N_CHIRPS        # 640
+STRIDE_COLS      = STRIDE_CHIRPS // STFT_SHIFT     # 11
+
+# New columns added per single frame (for smooth streaming display)
+COLS_PER_FRAME   = N_CHIRPS // STFT_SHIFT          # 128 // 56 = 2
+
+# ── dB display range (matches plot_spectrogram: vmin=-20, vmax=None) ──────────
+DB_MIN           = -20
+DB_MAX           = 0
+
+# ── Legacy aliases ────────────────────────────────────────────────────────────
+NFFT             = STFT_NFFT
+FREQ_BINS        = STFT_NFFT
+BUFFER_FRAMES    = EPOCH_FRAMES
+
+# ── Pre-compute MTI filter coefficients once ──────────────────────────────────
+_MTI_B, _MTI_A  = butter(1, 0.01, 'high', output='ba')
+
+# ── Pre-compute Hanning window once ───────────────────────────────────────────
+_HANNING_WIN     = np.hanning(STFT_WINDOW).astype(np.float64)
 
 
-def _stft(signal, window, nfft, shift):
-    n = (len(signal) - window - 1) // shift
-    out = np.zeros((nfft, n), dtype=complex)
-    for i in range(n):
-        segment = signal[i * shift: i * shift + window]
-        windowed = segment * np.hanning(window)
-        out[:, i] = np.fft.fft(windowed, n=nfft)
-    return out
+# ══════════════════════════════════════════════════════════════════════════════
+# Core spectrogram function — exact port of processing_utils.spectrogram()
+# ══════════════════════════════════════════════════════════════════════════════
+
+def spectrogram_from_frames(frames: np.ndarray, mti: bool = True) -> np.ndarray:
+    """
+    Compute the micro-Doppler spectrogram from a batch of raw radar frames.
+
+    This is a direct port of processing_utils.spectrogram() without matplotlib,
+    producing the exact same numerical output used to generate training images.
+
+    Args:
+        frames: (n_frame, n_ant, n_chirp, n_sample)  raw IQ data.
+                A 3-D input (n_ant, n_chirp, n_sample) is treated as n_frame=1.
+
+    Returns:
+        (STFT_NFFT, n_cols) float — FFT-shifted magnitude spectrogram.
+        NOT yet converted to dB; call spectrogram_to_db() on the result.
+    """
+    frames = np.asarray(frames, dtype=complex)
+    if frames.ndim == 3:
+        frames = frames[np.newaxis]                  # → (1, n_ant, n_chirp, n_sample)
+
+    # ── Step 1: Select antenna 0 only (exact match to reference) ─────────────
+    data = frames[:, 0, :, :]                        # (n_frame, n_chirp, n_sample)
+
+    # ── Step 2: Transpose + Fortran-order reshape ─────────────────────────────
+    #   (n_frame, n_chirp, n_sample)
+    #   → transpose(2,1,0) → (n_sample, n_chirp, n_frame)
+    #   → reshape Fortran → (n_sample, n_chirp*n_frame)
+    data     = np.transpose(data, (2, 1, 0))         # (n_sample, n_chirp, n_frame)
+    n_sample = data.shape[0]
+    n_chirps = data.shape[1] * data.shape[2]
+    data     = data.reshape((n_sample, n_chirps), order='F')
+
+    # ── Step 3: Zero-padded range FFT (2×N), keep positive half ──────────────
+    range_fft = np.fft.fft(data, 2 * n_sample, axis=0)[n_sample:] / n_sample
+
+    # ── Step 4: Static clutter removal (subtract slow-time mean per range bin)─
+    range_fft -= np.mean(range_fft, axis=1, keepdims=True)
+
+    # ── Step 5: MTI Butterworth highpass filter along slow-time ──────────────
+    if mti:
+        rngpro = lfilter(_MTI_B, _MTI_A, range_fft, axis=1)
+    else:
+        rngpro = range_fft
+
+    # ── Step 6: Range bin selection — UPPER half (matches reference exactly) ──
+    #   rBin = np.arange(num_samples // 2, num_samples - 1)
+    r_start = n_sample // 2
+    r_end   = n_sample - 1
+    rBin    = slice(r_start, r_end)
+
+    # ── Step 7: Sum over range bins → 1-D slow-time signal ───────────────────
+    vec = np.sum(rngpro[rBin, :], axis=0)            # (n_chirps,) complex
+
+    # ── Step 8: STFT with Hanning window ─────────────────────────────────────
+    spect = _stft_hanning(vec)
+
+    # ── Step 9: FFT-shift + magnitude ────────────────────────────────────────
+    return np.abs(np.fft.fftshift(spect, axes=0))    # (STFT_NFFT, n_cols) float
 
 
-def _mti_filter(range_profile):
-    b, a = butter(1, 0.01, 'high', output='ba')
-    filtered = np.zeros_like(range_profile)
-    for r in range(filtered.shape[0]):
-        filtered[r, :] = lfilter(b, a, range_profile[r, :])
-    return filtered
+def spectrogram_to_db(spect: np.ndarray) -> np.ndarray:
+    """
+    Convert a magnitude spectrogram to dB, normalised to its own peak.
 
+    Matches plot_spectrogram():
+        20 * log10(|spect| / max_val),  clipped at DB_MIN (−20 dB).
+
+    Args:
+        spect: (STFT_NFFT, n_cols) float magnitude (output of spectrogram_from_frames)
+
+    Returns:
+        (STFT_NFFT, n_cols) float dB, range [DB_MIN, 0]
+    """
+    max_val = np.max(spect)
+    if max_val <= 0:
+        max_val = 1.0
+    db = 20.0 * np.log10(spect / max_val + 1e-10)
+    return np.clip(db, DB_MIN, DB_MAX).astype(np.float32)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Vectorised STFT — Hanning window, exact column count from reference
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _stft_hanning(signal: np.ndarray,
+                  window: int = STFT_WINDOW,
+                  nfft:   int = STFT_NFFT,
+                  shift:  int = STFT_SHIFT) -> np.ndarray:
+    """
+    STFT using the exact same column-count formula as processing_utils.stft():
+        n = (len(data) - window - 1) // shift
+
+    Uses stride tricks + batch FFT (no Python loop) for performance.
+
+    Returns:
+        (nfft, n_cols) complex — NOT yet shifted or magnitude-taken.
+    """
+    n      = len(signal)
+    n_cols = (n - window - 1) // shift     # exact reference formula
+    if n_cols <= 0:
+        return np.zeros((nfft, 1), dtype=complex)
+
+    # Ensure contiguous for stride trick
+    sig = np.ascontiguousarray(signal)
+    win = _HANNING_WIN[:window]
+
+    # Build (n_cols, window) view without copying
+    shape   = (n_cols, window)
+    strides = (sig.strides[0] * shift, sig.strides[0])
+    frames  = np.lib.stride_tricks.as_strided(sig, shape=shape, strides=strides)
+
+    # Batch FFT
+    spectra = np.fft.fft(frames * win, n=nfft, axis=1)   # (n_cols, nfft)
+    return spectra.T                                       # (nfft, n_cols)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SpectrogramProcessor — streaming interface used by RadarBridge
+# ══════════════════════════════════════════════════════════════════════════════
 
 class SpectrogramProcessor:
-    def __init__(self, num_samples=64, num_chirps=64, buffer_frames=BUFFER_FRAMES,
-                 streaming=False):
-        self._num_samples = num_samples
-        self._num_chirps = num_chirps
+    """
+    Accumulates raw radar frames and produces a micro-Doppler spectrogram
+    using the exact same algorithm as processing_utils.spectrogram().
+
+    streaming=True  (RadarBridge → SpectrogramWidget live display)
+        Maintains a rolling frame deque.  Every new frame emits COLS_PER_FRAME
+        new STFT columns so the display updates at full 10 fps.
+
+    streaming=False  (_frames_to_pil → inference)
+        Accumulates EPOCH_FRAMES frames then returns the full
+        (STFT_NFFT × EPOCH_COLS) dB spectrogram in one shot.
+    """
+
+    def __init__(self, num_chirps=N_CHIRPS, num_samples=N_SAMPLES,
+                 buffer_frames=EPOCH_FRAMES, streaming=False, **_):
         self._streaming = streaming
-        self._buffer = deque(maxlen=buffer_frames)
+        n = max(buffer_frames, EPOCH_FRAMES)
+        self._buf: deque = deque(maxlen=n)
 
-    def push_frame(self, frame):
-        self._buffer.append(frame[0].copy())
-        if len(self._buffer) < self._buffer.maxlen:
-            return None
-        return self._compute()
-
-    def _compute(self):
-        frames = np.array(self._buffer)
-        data = np.transpose(frames, (2, 1, 0))
-        num_samples = data.shape[0]
-        num_chirps = data.shape[1] * data.shape[2]
-        data = data.reshape((num_samples, num_chirps), order='F')
-
-        range_fft = np.fft.fft(data, 2 * num_samples, axis=0)[num_samples:] / num_samples
-        range_fft -= np.expand_dims(np.mean(range_fft, 1), 1)
-
-        rng = _mti_filter(range_fft)
-
-        rBin = np.arange(num_samples // 2, num_samples - 1)
-        vec = np.sum(rng[rBin, :], axis=0)
-
-        spect = _stft(vec, WINDOW, NFFT, SHIFT)
-        spect = np.abs(np.fft.fftshift(spect, axes=0))
-
-        maxval = np.max(spect) if np.max(spect) != 0 else 1.0
-        spect_db = 20 * np.log10(spect / maxval + 1e-6)
+    def push_frame(self, frame: np.ndarray):
+        """
+        Args:
+            frame: (n_ant, n_chirp, n_sample) — one raw frame.
+                   (n_chirp, n_sample) treated as single-antenna.
+        Returns:
+            dB spectrogram slice or None.
+        """
+        if frame.ndim == 2:
+            frame = frame[np.newaxis]
+        self._buf.append(frame.copy())
 
         if self._streaming:
-            # Only emit the newly computed columns (one frame's worth) so the
-            # rolling display buffer advances correctly without duplicating data.
-            cols_per_frame = max(1, self._num_chirps // SHIFT)
-            return spect_db[:, -cols_per_frame:]
-        return spect_db
+            return self._emit_streaming()
+        else:
+            return self._emit_batch()
+
+    # ── streaming ─────────────────────────────────────────────────────────────
+
+    def _emit_streaming(self):
+        n = len(self._buf)
+        if n < 4:           # need enough chirps for at least one STFT window
+            return None
+        stack    = np.stack(list(self._buf), axis=0)    # (n, n_ant, n_chirp, n_sample)
+        spect    = spectrogram_from_frames(stack)         # (STFT_NFFT, n_cols)
+        spect_db = spectrogram_to_db(spect)
+
+        # Return only the newest COLS_PER_FRAME columns
+        n_emit = min(COLS_PER_FRAME, spect_db.shape[1])
+        return spect_db[:, -n_emit:]                      # (STFT_NFFT, COLS_PER_FRAME)
+
+    # ── batch / inference ─────────────────────────────────────────────────────
+
+    def _emit_batch(self):
+        if len(self._buf) < self._buf.maxlen:
+            return None
+        stack    = np.stack(list(self._buf), axis=0)
+        spect    = spectrogram_from_frames(stack)
+        return spectrogram_to_db(spect)                   # (STFT_NFFT, EPOCH_COLS)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Exact reference functions from prediction_utils.py  (kept for completeness)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def generate_range_doppler_profiles_per_antenna(data: np.ndarray) -> np.ndarray:
+    """Exact copy of generate_range_doppler_profiles_per_antenna."""
+    from scipy.signal import windows as sw
+    n_frame, n_antenna, n_chirp, n_sample = data.shape
+    data_c = data - np.mean(data, axis=-1, keepdims=True)
+    rw     = sw.blackmanharris(n_sample).reshape(1, n_sample)
+    data_w = data_c * rw
+    rfft   = np.fft.fft(data_w, axis=-1) / np.sum(rw)
+    rfft  -= np.mean(rfft, axis=2, keepdims=True)
+    half   = rfft[..., :n_sample // 2 + 1]
+    half[:, :, :, 1::-1] = 2 * half[:, :, :, 1::-1]
+    dw     = sw.blackmanharris(n_chirp).reshape(1, 1, n_chirp, 1)
+    half_w = half * dw
+    return np.fft.fftshift(np.fft.fft(half_w, axis=2), axes=2) / np.sum(dw)
+
+
+def generate_range_doppler_profiles(data: np.ndarray) -> np.ndarray:
+    """Exact copy of generate_range_doppler_profiles."""
+    if data.ndim != 4:
+        raise ValueError("Input must be 4-D: (n_frame, n_antenna, n_chirp, n_sample)")
+    n_frame, n_antenna, n_chirp, n_sample = data.shape
+    rd = generate_range_doppler_profiles_per_antenna(data)
+    return np.sum(np.abs(rd), axis=1) / n_antenna
