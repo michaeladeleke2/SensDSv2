@@ -33,7 +33,7 @@ from scipy.ndimage import gaussian_filter
 from PyQt6 import QtWidgets, QtCore, QtGui
 from core.processing import SpectrogramProcessor
 from ui.spectrogram_widget import SpectrogramWidget, DB_MIN, DB_MAX
-from ui import HintCard
+from ui import HintCard, _scrollable_left
 
 # Ensure the project root is importable so "from vex.aim import Robot" resolves.
 _PROJECT_ROOT = os.path.normpath(os.path.join(os.path.dirname(__file__), ".."))
@@ -369,7 +369,6 @@ class VexAimTab(QtWidgets.QWidget):
     def _build_left(self):
         panel = QtWidgets.QWidget()
         panel.setObjectName("vex_left")
-        panel.setFixedWidth(300)
         lyt = QtWidgets.QVBoxLayout(panel)
         lyt.setContentsMargins(18, 16, 18, 16)
         lyt.setSpacing(7)
@@ -484,7 +483,7 @@ class VexAimTab(QtWidgets.QWidget):
         self._log_widget.setMaximumBlockCount(300)
         lyt.addWidget(self._log_widget, 1)
 
-        return panel
+        return _scrollable_left(panel, width=300)
 
     def _build_right(self):
         panel = QtWidgets.QWidget()

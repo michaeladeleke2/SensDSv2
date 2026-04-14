@@ -5,7 +5,7 @@ import numpy as np
 from pathlib import Path
 from PyQt6 import QtWidgets, QtCore, QtGui
 import pyqtgraph as pg
-from ui import app_colors, HintCard
+from ui import app_colors, HintCard, _scrollable_left
 
 
 def _train_style(c: dict) -> str:
@@ -490,7 +490,6 @@ class TrainTab(QtWidgets.QWidget):
     def _build_left_panel(self):
         panel = QtWidgets.QWidget()
         panel.setObjectName("left_panel")
-        panel.setFixedWidth(300)
         layout = QtWidgets.QVBoxLayout(panel)
         layout.setContentsMargins(20, 20, 20, 20)
         layout.setSpacing(10)
@@ -647,7 +646,7 @@ class TrainTab(QtWidgets.QWidget):
         self._stop_btn.setVisible(False)
         layout.addWidget(self._stop_btn)
 
-        return panel
+        return _scrollable_left(panel, width=300)
 
     def _build_right_panel(self):
         panel = QtWidgets.QWidget()

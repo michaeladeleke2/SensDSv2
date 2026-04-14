@@ -6,7 +6,7 @@ from collections import deque
 from scipy.ndimage import gaussian_filter
 from PyQt6 import QtWidgets, QtCore, QtGui
 from core.processing import SpectrogramProcessor
-from ui import HintCard
+from ui import HintCard, _scrollable_left
 from ui.spectrogram_widget import DB_MIN, DB_MAX, FREQ_BINS, MAX_VELOCITY, FRAME_TIME_S
 
 
@@ -857,7 +857,6 @@ class TestTab(QtWidgets.QWidget):
     def _build_left(self):
         panel = QtWidgets.QWidget()
         panel.setObjectName("test_left")
-        panel.setFixedWidth(310)
         layout = QtWidgets.QVBoxLayout(panel)
         layout.setContentsMargins(18, 16, 18, 16)
         layout.setSpacing(7)
@@ -949,7 +948,7 @@ class TestTab(QtWidgets.QWidget):
 
         layout.addWidget(self._build_confirm_widget())
 
-        return panel
+        return _scrollable_left(panel, width=310)
 
     def _build_mode_picker(self):
         """3 stacked buttons for mode selection."""

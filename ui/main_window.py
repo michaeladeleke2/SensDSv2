@@ -179,7 +179,15 @@ class MainWindow(QtWidgets.QMainWindow):
         super().__init__()
         self.setWindowTitle("SensDSv2 — Sensing for Data Science")
         self.setWindowIcon(QtGui.QIcon(resource_path("assets/SensDSLogo.png")))
-        self.resize(1200, 740)
+        self.setMinimumSize(900, 580)
+        screen = QtGui.QGuiApplication.primaryScreen()
+        if screen:
+            avail = screen.availableGeometry()
+            w = min(1280, avail.width() - 40)
+            h = min(820, avail.height() - 60)
+            self.resize(w, h)
+        else:
+            self.resize(1200, 740)
         self._bridge = None
         self._connected = False
         self._elapsed = 0

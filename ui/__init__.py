@@ -2,6 +2,32 @@ from PyQt6 import QtWidgets, QtGui, QtCore
 from ui.gamification import GamificationManager, GamificationBar, BadgeToast  # noqa: F401
 
 
+def _scrollable_left(content_widget: QtWidgets.QWidget, width: int = 300) -> QtWidgets.QScrollArea:
+    """
+    Wrap a left-panel content widget in a vertically-scrollable QScrollArea.
+    The content widget keeps its object name (and thus its stylesheet rules),
+    while the fixed width moves to the scroll area so it stays locked on resize.
+    """
+    scroll = QtWidgets.QScrollArea()
+    scroll.setWidget(content_widget)
+    scroll.setWidgetResizable(True)
+    scroll.setFixedWidth(width)
+    scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+    scroll.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+    scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+    scroll.setStyleSheet("""
+        QScrollArea { background: transparent; }
+        QScrollBar:vertical {
+            width: 6px; background: transparent; margin: 0;
+        }
+        QScrollBar::handle:vertical {
+            background: #cccccc; border-radius: 3px; min-height: 20px;
+        }
+        QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
+    """)
+    return scroll
+
+
 class HintCard(QtWidgets.QWidget):
     """Rotating hint card that cycles through a list of tip strings."""
 
