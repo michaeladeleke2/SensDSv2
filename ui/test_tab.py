@@ -273,7 +273,19 @@ class InferenceWorker(QtCore.QObject):
     @QtCore.pyqtSlot()
     def run(self):
         try:
-            import torch
+            try:
+                import torch
+            except ImportError as ie:
+                # Common on Windows when the CUDA PyTorch build is installed on a
+                # device without an NVIDIA GPU (c10.dll / torch_cuda.dll missing).
+                self.error.emit(
+                    "PyTorch could not load — a required DLL is missing.\n\n"
+                    "Fix: run  setup_windows.bat  to install the CPU-only build of "
+                    "PyTorch, which works on all Windows devices.\n\n"
+                    f"(Technical detail: {ie})"
+                )
+                return
+
             img = _frames_to_pil(self._frames)
             if img is None:
                 self.error.emit("Not enough frames for inference.")

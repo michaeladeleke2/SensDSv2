@@ -1,12 +1,32 @@
+# ── SensDSv2 dependencies ─────────────────────────────────────────────────────
+#
+# macOS / Linux:
+#   pip install -r requirements.txt
+#
+# Windows (Surface, school laptops, any device without an NVIDIA GPU):
+#   Double-click  setup_windows.bat  — it installs the CPU-only PyTorch build.
+#
+#   DO NOT run "pip install torch" on Windows without the --index-url flag below.
+#   The default PyPI torch package is the CUDA/GPU build and requires NVIDIA
+#   driver DLLs (c10.dll, torch_cuda.dll, …) that are absent on most PCs.
+#
+# Windows manual install (if you prefer the command line):
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+#   pip install -r requirements.txt
+#
+# ─────────────────────────────────────────────────────────────────────────────
+
 PyQt6>=6.5.0
 pyqtgraph>=0.13.3
 numpy>=1.24.0
 scipy>=1.10.0
+
+# PyTorch — installed separately on Windows (see note above)
 torch
 torchvision
-transformers
-Pillow
+
+transformers>=4.30.0
+Pillow>=9.0.0
 evaluate
 accelerate
-pyinstaller
 websocket-client>=1.9

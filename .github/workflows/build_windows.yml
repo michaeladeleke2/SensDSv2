@@ -1,0 +1,82 @@
+name: Build Windows Executable
+
+# Triggers:
+#   - Every push to main (so you always have a fresh build after git push from your Mac)
+#   - Every version tag  (e.g. git tag v1.2 && git push --tags → release build)
+#   - Manual trigger from the GitHub Actions tab (Actions → Build Windows → Run workflow)
+on:
+  push:
+    branches: [main, master]
+  create:
+    tags:
+      - 'v*'
+  workflow_dispatch:   # manual "Run workflow" button in GitHub UI
+
+jobs:
+  build-windows:
+    runs-on: windows-latest   # real Windows 2022 VM — produces genuine Windows DLLs
+
+    steps:
+      # ── 1. Check out your code ─────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. Set up Python ──────────────────────────────────────────────────
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      # ── 3. Install CPU-only PyTorch FIRST ─────────────────────────────────
+      #    This is the critical step.  Installing plain "torch" would pull in
+      #    the CUDA build, which requires NVIDIA drivers that Surface devices
+      #    don't have → c10.dll / torch_cuda.dll errors at runtime.
+      - name: Install CPU-only PyTorch
+        run: |
+          pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+
+      # ── 4. Install remaining dependencies ─────────────────────────────────
+      - name: Install app dependencies
+        run: |
+          pip install `
+            "PyQt6>=6.5.0" `
+            "pyqtgraph>=0.13.3" `
+            "numpy>=1.24.0" `
+            "scipy>=1.10.0" `
+            "transformers>=4.30.0" `
+            "Pillow>=9.0.0" `
+            evaluate `
+            accelerate `
+            "websocket-client>=1.9" `
+            pyinstaller
+
+      # ── 5. Build with PyInstaller ──────────────────────────────────────────
+      #    The spec automatically detects win32 and uses one-directory mode.
+      - name: Build executable
+        run: pyinstaller main.spec
+
+      # ── 6. Zip the dist folder ─────────────────────────────────────────────
+      #    dist/SensDSv2/ contains SensDSv2.exe + all DLLs.
+      #    Zip it so it can be downloaded as a single file and copied to USBs.
+      - name: Zip dist folder
+        run: |
+          Compress-Archive -Path dist\SensDSv2 -DestinationPath SensDSv2-Windows.zip
+
+      # ── 7. Upload as a build artifact ─────────────────────────────────────
+      #    Find it at: GitHub → Actions → this run → Artifacts → SensDSv2-Windows
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SensDSv2-Windows
+          path: SensDSv2-Windows.zip
+          retention-days: 30   # artifact stays available for 30 days
+
+      # ── 8. Create a GitHub Release on version tags ─────────────────────────
+      #    git tag v1.0 && git push --tags  → zip appears as a release download
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: SensDSv2-Windows.zip
+          generate_release_notes: true

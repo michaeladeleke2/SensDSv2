@@ -23,7 +23,22 @@ HINTS = [
 ]
 
 
-def _app_style(c: dict) -> str:
+def _app_style(c: dict, compact: bool = False) -> str:
+    """
+    compact=True is used on screens shorter than 800 px (e.g. Surface tablets).
+    It reduces font sizes and button padding so the topbar takes only 64 px instead of 96 px,
+    freeing ~32 px of content height on small displays.
+    """
+    btn_pad   = "7px 16px"  if compact else "12px 28px"
+    btn_font  = "14px"      if compact else "17px"
+    stat_font = "13px"      if compact else "17px"
+    time_font = "15px"      if compact else "19px"
+    hint_font = "13px"      if compact else "16px"
+    err_font  = "13px"      if compact else "16px"
+    tab_pad   = "12px 0px"  if compact else "20px 0px"
+    tab_font  = "14px"      if compact else "17px"
+    tab_minw  = "110px"     if compact else "160px"
+
     return f"""
     QMainWindow {{ background-color: {c['bg']}; }}
 
@@ -37,17 +52,17 @@ def _app_style(c: dict) -> str:
         color: #ffffff;
     }}
     QLabel#status_label {{
-        font-size: 17px;
+        font-size: {stat_font};
         color: #aac4e0;
     }}
     QLabel#timer_label {{
-        font-size: 19px;
+        font-size: {time_font};
         font-weight: bold;
         color: #ffffff;
         font-family: monospace;
     }}
     QLabel#hint_label {{
-        font-size: 16px;
+        font-size: {hint_font};
         color: #aac4e0;
         font-style: italic;
     }}
@@ -56,8 +71,8 @@ def _app_style(c: dict) -> str:
         color: white;
         border: none;
         border-radius: 8px;
-        padding: 12px 28px;
-        font-size: 17px;
+        padding: {btn_pad};
+        font-size: {btn_font};
         font-weight: bold;
     }}
     QPushButton#connect_btn:hover {{ background-color: #2ecc71; }}
@@ -66,13 +81,13 @@ def _app_style(c: dict) -> str:
         color: white;
         border: none;
         border-radius: 8px;
-        padding: 12px 28px;
-        font-size: 17px;
+        padding: {btn_pad};
+        font-size: {btn_font};
         font-weight: bold;
     }}
     QPushButton#disconnect_btn:hover {{ background-color: #e74c3c; }}
     QLabel#error_label {{
-        font-size: 16px;
+        font-size: {err_font};
         color: #f1948a;
     }}
 
@@ -87,11 +102,11 @@ def _app_style(c: dict) -> str:
     QTabBar::tab {{
         background: {c['bg']};
         color: {c['subtext']};
-        padding: 20px 0px;
-        font-size: 17px;
+        padding: {tab_pad};
+        font-size: {tab_font};
         border: none;
         border-bottom: 4px solid transparent;
-        min-width: 160px;
+        min-width: {tab_minw};
     }}
     QTabBar::tab:selected {{
         color: {c['accent']};
@@ -179,21 +194,23 @@ class MainWindow(QtWidgets.QMainWindow):
         super().__init__()
         self.setWindowTitle("SensDSv2 — Sensing for Data Science")
         self.setWindowIcon(QtGui.QIcon(resource_path("assets/SensDSLogo.png")))
-        self.setMinimumSize(900, 580)
+        self.setMinimumSize(860, 540)
         screen = QtGui.QGuiApplication.primaryScreen()
         if screen:
             avail = screen.availableGeometry()
             w = min(1280, avail.width() - 40)
             h = min(820, avail.height() - 60)
             self.resize(w, h)
+            self._compact = avail.height() < 800   # Surface / small-screen mode
         else:
             self.resize(1200, 740)
+            self._compact = False
         self._bridge = None
         self._connected = False
         self._elapsed = 0
         self._hint_index = 0
         self._gamification_mgr = GamificationManager(self)
-        self.setStyleSheet(_app_style(app_colors()))
+        self.setStyleSheet(_app_style(app_colors(), compact=self._compact))
         self._setup_ui()
         self._setup_timers()
         # Let the toast overlay the full window (set after show so geometry is valid)
@@ -217,18 +234,21 @@ class MainWindow(QtWidgets.QMainWindow):
     def _build_topbar(self):
         topbar = QtWidgets.QWidget()
         topbar.setObjectName("topbar")
-        topbar.setFixedHeight(96)
+        topbar_h = 64 if self._compact else 96
+        topbar.setFixedHeight(topbar_h)
         layout = QtWidgets.QHBoxLayout(topbar)
-        layout.setContentsMargins(24, 0, 24, 0)
-        layout.setSpacing(20)
+        layout.setContentsMargins(16 if self._compact else 24, 0,
+                                  16 if self._compact else 24, 0)
+        layout.setSpacing(12 if self._compact else 20)
 
         # Logo
         logo_path = resource_path("assets/SensDSLogo.png")
         if os.path.exists(logo_path):
             logo_container = QtWidgets.QLabel()
             logo_container.setStyleSheet("background: transparent;")
+            logo_h = topbar_h - 8
             pixmap = QtGui.QPixmap(logo_path).scaledToHeight(
-                88, QtCore.Qt.TransformationMode.SmoothTransformation
+                logo_h, QtCore.Qt.TransformationMode.SmoothTransformation
             )
             logo_container.setPixmap(pixmap)
             logo_container.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)

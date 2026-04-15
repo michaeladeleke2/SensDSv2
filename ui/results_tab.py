@@ -112,7 +112,7 @@ class ConfusionMatrixWidget(QtWidgets.QWidget):
         super().__init__(parent)
         self._classes: list = []
         self._matrix: np.ndarray = np.zeros((0, 0), dtype=int)
-        self.setMinimumSize(200, 180)
+        self.setMinimumSize(150, 120)
 
     def set_classes(self, classes: list):
         self._classes = list(classes)

@@ -401,7 +401,7 @@ class CollectTab(QtWidgets.QWidget):
         self._preview_plot.setYRange(-MAX_VELOCITY, MAX_VELOCITY, padding=0)
         self._preview_plot.setXRange(0, 3.0, padding=0)
 
-        layout.addWidget(self._preview_widget)
+        layout.addWidget(self._preview_widget, 1)   # fills all remaining vertical space
 
         bottom_row = QtWidgets.QHBoxLayout()
 

@@ -231,9 +231,21 @@ class TrainWorker(QtCore.QObject):
     def run(self):
         self._running = True
         try:
-            import torch
-            import torchvision.transforms as T
-            from torch.utils.data import Dataset
+            # Guard against the CUDA PyTorch DLL issue on Windows devices
+            # that don't have an NVIDIA GPU (Surface, school laptops, etc.).
+            try:
+                import torch
+                import torchvision.transforms as T
+                from torch.utils.data import Dataset
+            except ImportError as ie:
+                self.error.emit(
+                    "PyTorch could not load — a required DLL is missing.\n\n"
+                    "Fix: run  setup_windows.bat  to install the CPU-only build of "
+                    "PyTorch, which works on all Windows devices without a GPU.\n\n"
+                    f"(Technical detail: {ie})"
+                )
+                return
+
             from transformers import (
                 AutoImageProcessor, AutoModelForImageClassification,
                 TrainingArguments, Trainer,
@@ -680,15 +692,15 @@ class TrainTab(QtWidgets.QWidget):
         self._f1_curve = self._chart.plot(
             [], [], name='F1 (macro)', pen=pg.mkPen('#f39c12', width=3, style=QtCore.Qt.PenStyle.DashLine)
         )
-        self._chart.setMinimumHeight(260)
-        layout.addWidget(self._chart)
+        self._chart.setMinimumHeight(120)
+        layout.addWidget(self._chart, 3)   # takes 3/4 of flexible space
 
         layout.addWidget(self._lbl_section("Training Log"))
 
         self._log = QtWidgets.QPlainTextEdit()
         self._log.setReadOnly(True)
-        self._log.setMinimumHeight(160)
-        layout.addWidget(self._log)
+        self._log.setMinimumHeight(60)
+        layout.addWidget(self._log, 1)     # takes 1/4 of flexible space
 
         bottom_row = QtWidgets.QHBoxLayout()
         bottom_row.addStretch()

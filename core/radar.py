@@ -1,7 +1,11 @@
 import threading
 import numpy as np
-from ifxradarsdk.fmcw import DeviceFmcw
-from ifxradarsdk.fmcw.types import FmcwSimpleSequenceConfig
+
+# NOTE: ifxradarsdk is imported lazily inside RadarStream.start() so that the
+# app can be imported and built (PyInstaller / CI) on machines that don't have
+# the Infineon SDK installed.  The Connect Radar button is the only code path
+# that ever calls start(), so the ImportError surfaces naturally with a clear
+# error message instead of crashing at startup.
 
 
 def build_config():
@@ -9,6 +13,7 @@ def build_config():
     Build radar config matching cfg_simo_chirp.json + cfg_simo_seq.json
     so that the live stream matches the data used for model training.
     """
+    from ifxradarsdk.fmcw.types import FmcwSimpleSequenceConfig
     cfg = FmcwSimpleSequenceConfig()
     # ── Sequence (cfg_simo_seq.json) ─────────────────────────────────────────
     cfg.frame_repetition_time_s = 0.10       # 10 fps
@@ -38,6 +43,17 @@ class RadarStream:
         self._running = False
 
     def start(self):
+        # Lazy import — only runs when the user clicks "Connect Radar".
+        # This allows the app to start and PyInstaller to build on machines
+        # without the Infineon SDK installed.
+        try:
+            from ifxradarsdk.fmcw import DeviceFmcw
+        except ImportError:
+            raise RuntimeError(
+                "Infineon Radar SDK (ifxradarsdk) is not installed.\n"
+                "Install it from the SDK wheel provided with your radar hardware."
+            )
+
         self._device = DeviceFmcw()
         cfg = build_config()
         sequence = self._device.create_simple_sequence(cfg)
