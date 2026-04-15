@@ -11,4 +11,5 @@ dist/
 tmp.iconset/
 inf_wheel/
 .claude/
-*.spec
+# *.spec intentionally NOT ignored — main.spec is source-controlled so
+# GitHub Actions and other build machines can find it via git clone.
