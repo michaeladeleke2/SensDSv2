@@ -41,8 +41,10 @@ try:
     datas += tmp[0]; binaries += tmp[1]; hiddenimports += tmp[2]
     print("INFO: ifxradarsdk collected.")
 except Exception:
-    print("INFO: ifxradarsdk not found — radar streaming will require the SDK "
-          "to be installed separately on the target device.")
+    print("INFO: ifxradarsdk not found on this build machine.")
+    print("INFO: The built app will start and run normally, but radar streaming")
+    print("INFO: will not work.  To include radar support, run build_local.bat")
+    print("INFO: on a Windows machine that has the Infineon SDK installed.")
 
 # ── PyTorch ───────────────────────────────────────────────────────────────────
 # torch is imported lazily inside worker threads so PyInstaller cannot detect
@@ -66,6 +68,12 @@ hiddenimports += [
     'accelerate',
     'scipy.signal',
     'scipy.ndimage',
+    # Infineon SDK — imported lazily in core/radar.py so PyInstaller won't
+    # detect them via static analysis; list them explicitly so they're found
+    # when the SDK *is* present on the build machine.
+    'ifxradarsdk',
+    'ifxradarsdk.fmcw',
+    'ifxradarsdk.fmcw.types',
 ]
 
 # ─────────────────────────────────────────────────────────────────────────────
