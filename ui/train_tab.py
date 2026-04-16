@@ -103,38 +103,55 @@ MIN_CLASSES = 3
 DATA_ROOT = os.path.join(os.path.expanduser("~"), "SensDSv2_data")
 MODELS_DIR = os.path.join(DATA_ROOT, "models")
 
-# Look for a bundled ViT model next to the project root (mirrors phygo layout)
+# Available base models for fine-tuning
+# Keys are shown in the UI dropdown; values are the HuggingFace model IDs.
+_MODEL_OPTIONS = {
+    "Small": "WinKawaks/vit-small-patch16-224",   # ~22 M params — fast on Surface / CPU
+    "Base":  "google/vit-base-patch16-224",        # ~86 M params — highest accuracy
+}
+_DEFAULT_MODEL_KEY = "Small"
+
+# Legacy constant kept for backwards compatibility (used by DownloadWorker default)
 _HERE = Path(__file__).resolve().parent
-_BUNDLED_MODEL = _HERE.parent / "models" / "vit-base-patch16-224"
-_HF_MODEL_ID = "google/vit-base-patch16-224"
+_HF_MODEL_ID = _MODEL_OPTIONS[_DEFAULT_MODEL_KEY]
 
 
-def _hf_cache_snapshot() -> Path | None:
-    """Return the path to the locally cached HF snapshot if it exists."""
+def _model_local_dir(model_id: str) -> Path:
+    """Return the local bundle path for a given HuggingFace model ID."""
+    model_name = model_id.split("/")[-1]   # e.g. "vit-small-patch16-224"
+    return _HERE.parent / "models" / model_name
+
+
+def _hf_cache_snapshot(model_id: str) -> Path | None:
+    """Return the path to the locally cached HF snapshot for model_id, if it exists."""
     cache_root = Path(os.environ.get("HF_HOME", Path.home() / ".cache" / "huggingface"))
-    snapshots = cache_root / "hub" / "models--google--vit-base-patch16-224" / "snapshots"
+    # HF converts "/" to "--" in the cache folder name
+    cache_key = model_id.replace("/", "--")
+    snapshots = cache_root / "hub" / f"models--{cache_key}" / "snapshots"
     if snapshots.exists():
-        candidates = sorted(snapshots.iterdir())
-        for snap in reversed(candidates):          # prefer newest
+        for snap in reversed(sorted(snapshots.iterdir())):
             if (snap / "config.json").exists():
                 return snap
     return None
 
 
-def _resolve_model() -> tuple[str, str]:
+def _resolve_model(model_id: str) -> tuple[str, str]:
     """Return (model_path_or_id, human_label) for the best available source."""
-    if _BUNDLED_MODEL.exists() and (_BUNDLED_MODEL / "config.json").exists():
-        return str(_BUNDLED_MODEL), f"local bundle ({_BUNDLED_MODEL.name})"
-    snap = _hf_cache_snapshot()
+    local = _model_local_dir(model_id)
+    if local.exists() and (local / "config.json").exists():
+        return str(local), f"local bundle ({local.name})"
+    snap = _hf_cache_snapshot(model_id)
     if snap:
         return str(snap), f"HF cache ({snap.parent.parent.name[:20]}…)"
-    return _HF_MODEL_ID, "HuggingFace (requires internet)"
+    return model_id, "HuggingFace (requires internet)"
 
 
-def model_is_available_offline() -> bool:
-    if _BUNDLED_MODEL.exists() and (_BUNDLED_MODEL / "config.json").exists():
+def model_is_available_offline(model_id: str | None = None) -> bool:
+    mid = model_id or _HF_MODEL_ID
+    local = _model_local_dir(mid)
+    if local.exists() and (local / "config.json").exists():
         return True
-    return _hf_cache_snapshot() is not None
+    return _hf_cache_snapshot(mid) is not None
 
 
 def scan_dataset(student_filter=None):
@@ -179,19 +196,23 @@ def _split_subjects(root_dir, val_subjects=1, seed=42):
 
 
 class DownloadWorker(QtCore.QObject):
-    """Downloads google/vit-base-patch16-224 into the local models/ directory."""
+    """Downloads a HuggingFace ViT model into the local models/ directory."""
     progress = QtCore.pyqtSignal(str)
     finished = QtCore.pyqtSignal()
     error = QtCore.pyqtSignal(str)
+
+    def __init__(self, model_id: str):
+        super().__init__()
+        self._model_id = model_id
 
     @QtCore.pyqtSlot()
     def run(self):
         try:
             from huggingface_hub import snapshot_download
-            dest = str(_BUNDLED_MODEL)
-            self.progress.emit("Downloading ViT model weights from HuggingFace…")
+            dest = str(_model_local_dir(self._model_id))
+            self.progress.emit(f"Downloading {self._model_id} from HuggingFace…")
             snapshot_download(
-                repo_id=_HF_MODEL_ID,
+                repo_id=self._model_id,
                 local_dir=dest,
                 ignore_patterns=["*.msgpack", "flax_model*", "tf_model*", "rust_model*"],
             )
@@ -216,7 +237,8 @@ class TrainWorker(QtCore.QObject):
     finished = QtCore.pyqtSignal(str)
     error = QtCore.pyqtSignal(str)
 
-    def __init__(self, student_filter, epochs, batch_size, lr, val_subjects, seed, output_dir):
+    def __init__(self, student_filter, epochs, batch_size, lr, val_subjects, seed,
+                 output_dir, model_id: str = _HF_MODEL_ID):
         super().__init__()
         self._student_filter = student_filter
         self._epochs = epochs
@@ -225,6 +247,7 @@ class TrainWorker(QtCore.QObject):
         self._val_subjects = val_subjects
         self._seed = seed
         self._output_dir = output_dir
+        self._model_id = model_id
         self._running = False
 
     @QtCore.pyqtSlot()
@@ -254,24 +277,22 @@ class TrainWorker(QtCore.QObject):
             import json
             from PIL import Image
 
-            # --- Device ---
-            if torch.cuda.is_available():
-                device = "cuda"
-            elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-                device = "mps"
-            else:
-                device = "cpu"
-            self.log.emit(f"Device: {device}")
+            # --- Device (centralised via platform_utils) ---
+            from core.platform_utils import get_device, device_label
+            _dev = get_device()
+            device = str(_dev) if _dev is not None else "cpu"
+            self.log.emit(f"Device: {device_label()}")
 
             # --- Model source ---
-            model_src, model_label = _resolve_model()
-            if model_src == _HF_MODEL_ID:
+            model_src, model_label = _resolve_model(self._model_id)
+            if model_src == self._model_id:
                 self.log.emit(
-                    "⚠  No local model found — attempting HuggingFace download.\n"
+                    f"⚠  No local copy of {self._model_id} found — "
+                    "attempting HuggingFace download.\n"
                     "   Connect to the internet or click 'Download Model' first."
                 )
             else:
-                self.log.emit(f"Model: {model_label}")
+                self.log.emit(f"Model: {model_label}  ({self._model_id})")
 
             processor = AutoImageProcessor.from_pretrained(model_src)
 
@@ -605,6 +626,20 @@ class TrainTab(QtWidgets.QWidget):
 
         layout.addWidget(self._divider())
 
+        layout.addWidget(self._lbl("Model Size"))
+        self._model_size = QtWidgets.QComboBox()
+        self._model_size.addItem("Small (vit-small-patch16-224, faster)")
+        self._model_size.addItem("Base (vit-base-patch16-224, more accurate)")
+        self._model_size.setCurrentIndex(0)   # default: Small
+        self._model_size.setToolTip(
+            "Small: ~22 M parameters — trains and runs significantly faster.\n"
+            "Recommended for Surface Pro and other CPU-only devices.\n\n"
+            "Base: ~86 M parameters — higher accuracy but slower to train.\n"
+            "Use if you have a machine with a dedicated GPU or more time."
+        )
+        self._model_size.currentIndexChanged.connect(self._on_model_size_changed)
+        layout.addWidget(self._model_size)
+
         layout.addWidget(self._lbl("Base Model"))
         self._model_status = QtWidgets.QLabel("")
         self._model_status.setWordWrap(True)
@@ -738,9 +773,19 @@ class TrainTab(QtWidgets.QWidget):
         line.setStyleSheet(f"color: {self._c['divider']}; margin: 2px 0;")
         return line
 
+    def _selected_model_id(self) -> str:
+        """Return the HuggingFace model ID matching the current dropdown selection."""
+        key = self._model_size.currentText().split()[0]   # "Small" or "Base"
+        return _MODEL_OPTIONS.get(key, _HF_MODEL_ID)
+
+    def _on_model_size_changed(self):
+        """Refresh the model status label when the user changes the size dropdown."""
+        self._refresh_model_status()
+
     def _refresh_model_status(self):
-        if model_is_available_offline():
-            _, label = _resolve_model()
+        mid = self._selected_model_id()
+        if model_is_available_offline(mid):
+            _, label = _resolve_model(mid)
             self._model_status.setObjectName("status_ok")
             self._model_status.setText(f"✓  {label}")
             self._download_btn.setEnabled(False)
@@ -749,6 +794,7 @@ class TrainTab(QtWidgets.QWidget):
             self._model_status.setObjectName("status_warn")
             self._model_status.setText("⚠  Not downloaded — training requires internet without this")
             self._download_btn.setEnabled(True)
+            self._download_btn.setText("⬇  Download Model (once)")
         self._model_status.style().unpolish(self._model_status)
         self._model_status.style().polish(self._model_status)
 
@@ -758,7 +804,7 @@ class TrainTab(QtWidgets.QWidget):
         self._model_status.setObjectName("status_warn")
         self._model_status.setText("Downloading model weights, please wait…")
 
-        dl_worker = DownloadWorker()
+        dl_worker = DownloadWorker(self._selected_model_id())
         dl_thread = QtCore.QThread(self)
         dl_worker.moveToThread(dl_thread)
         dl_thread.started.connect(dl_worker.run)
@@ -877,6 +923,7 @@ class TrainTab(QtWidgets.QWidget):
             val_subjects=self._val_subjects.value(),
             seed=42,
             output_dir=output_dir,
+            model_id=self._selected_model_id(),
         )
         self._thread = QtCore.QThread()
         self._worker.moveToThread(self._thread)

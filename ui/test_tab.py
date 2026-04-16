@@ -17,7 +17,9 @@ _ROBOT_R = 14
 _BALL_R = 8
 _TRAIL_MAX = 40
 _TICK_MS = 33           # ~30 fps
-_INFER_EVERY = 15       # ticks between inferences in RoboSoccer (~500 ms)
+_INFER_EVERY = 20       # ticks between inferences in RoboSoccer (~667 ms at 30 fps)
+_PRED_CACHE_CONF   = 0.8   # reuse prediction when confidence exceeds this
+_PRED_CACHE_FRAMES = 2     # frames to reuse before re-running inference
 
 # Maze has its own (slower) inference rhythm so the student has time to
 # complete a full gesture before the model looks at the frames.
@@ -245,6 +247,10 @@ class ModelLoadWorker(QtCore.QObject):
                 self._path, ignore_mismatched_sizes=True
             )
             model.eval()
+            from core.platform_utils import get_device
+            device = get_device()
+            if device is not None:
+                model.to(device)
             raw      = model.config.id2label
             id2label = {int(k): v for k, v in raw.items()}
             name     = os.path.basename(self._path.rstrip("/\\"))
@@ -290,10 +296,14 @@ class InferenceWorker(QtCore.QObject):
             if img is None:
                 self.error.emit("Not enough frames for inference.")
                 return
+            from core.platform_utils import get_device
+            device = get_device()
             inputs = self._hf_processor(images=img, return_tensors="pt")
+            if device is not None:
+                inputs = {k: v.to(device) for k, v in inputs.items()}
             with torch.no_grad():
                 logits = self._model(**inputs).logits
-            probs = torch.softmax(logits[0], dim=0).numpy()
+            probs = torch.softmax(logits[0], dim=0).cpu().numpy()
             result = {self._id2label[i]: float(p) for i, p in enumerate(probs)}
             self.result.emit(result)
         except Exception as e:
@@ -833,6 +843,9 @@ class TestTab(QtWidgets.QWidget):
         self._model_load_thread = None
         self._model_load_worker = None
         self._last_frames: list = []   # frames used for the most recent inference
+
+        self._cache_probs: dict    = {}   # last high-confidence prediction probs
+        self._cache_remaining: int = 0    # frames left to reuse the cached result
 
         self._anim_timer = None
         self._anim_steps = 0
@@ -1654,6 +1667,15 @@ class TestTab(QtWidgets.QWidget):
                 self._capture_btn.setEnabled(True)
             # maze and robosoccer are continuous — keep running on their timer
             return
+
+        # ── prediction cache ──────────────────────────────────────────────────
+        # For continuous modes (robosoccer, maze), reuse a recent high-confidence
+        # result for up to _PRED_CACHE_FRAMES ticks to reduce CPU load.
+        if mode != "single" and self._cache_remaining > 0 and self._cache_probs:
+            self._cache_remaining -= 1
+            self._on_inference_result(self._cache_probs, mode)
+            return
+
         self._last_frames = list(frames)   # remember for spectrogram preview
         self._inference_running = True
 
@@ -1680,6 +1702,15 @@ class TestTab(QtWidgets.QWidget):
         conf = probs[best]
         threshold = self._conf_threshold.value()
         nice = best.replace("_", " ").title()
+
+        # ── update prediction cache ───────────────────────────────────────────
+        # High-confidence continuous predictions are cached so the next
+        # _PRED_CACHE_FRAMES ticks can skip inference entirely, saving CPU.
+        if mode != "single" and conf >= _PRED_CACHE_CONF:
+            self._cache_probs     = dict(probs)
+            self._cache_remaining = _PRED_CACHE_FRAMES
+        elif mode != "single":
+            self._cache_remaining = 0
 
         # Update spectrogram preview for every inference
         self._update_spectrogram_preview(self._last_frames)

@@ -42,6 +42,9 @@ if _PROJECT_ROOT not in sys.path:
 
 MODELS_ROOT = os.path.join(os.path.expanduser("~"), "SensDSv2_data", "models")
 
+_PRED_CACHE_CONF   = 0.8   # reuse prediction when confidence exceeds this
+_PRED_CACHE_FRAMES = 2     # ticks to reuse before re-running inference
+
 # ─── stylesheet ───────────────────────────────────────────────────────────────
 
 VEX_STYLE = """
@@ -189,6 +192,10 @@ class ModelLoadWorker(QtCore.QObject):
                 self._path, ignore_mismatched_sizes=True
             )
             model.eval()
+            from core.platform_utils import get_device
+            device = get_device()
+            if device is not None:
+                model.to(device)
             raw      = model.config.id2label
             id2label = {int(k): v for k, v in raw.items()}
             name     = os.path.basename(self._path.rstrip("/\\"))
@@ -232,10 +239,14 @@ class InferenceWorker(QtCore.QObject):
             if img is None:
                 self.error.emit("Not enough radar frames — connect the radar first.")
                 return
+            from core.platform_utils import get_device
+            device = get_device()
             inputs = self._hf_processor(images=img, return_tensors="pt")
+            if device is not None:
+                inputs = {k: v.to(device) for k, v in inputs.items()}
             with torch.no_grad():
                 logits = self._model(**inputs).logits
-            probs = torch.softmax(logits[0], dim=0).numpy()
+            probs = torch.softmax(logits[0], dim=0).cpu().numpy()
             self.result.emit(
                 {self._id2label[i]: float(p) for i, p in enumerate(probs)}
             )
@@ -262,7 +273,7 @@ class DriveWorker(QtCore.QObject):
     stopped       = QtCore.pyqtSignal()
 
     _INTERVAL_S  = 0.40
-    _INFER_EVERY = 10
+    _INFER_EVERY = 20
     _MAX_ERRORS  = 5
 
     def __init__(self, robot, frame_buf: deque):
@@ -354,6 +365,9 @@ class VexAimTab(QtWidgets.QWidget):
         self._gesture_cooldown_until = 0.0  # time.time() threshold for next RS inference
         self._model_load_thread = None
         self._model_load_worker = None
+
+        self._cache_probs: dict    = {}   # last high-confidence prediction probs
+        self._cache_remaining: int = 0    # ticks left to reuse the cached result
 
         self._setup_ui()
 
@@ -778,6 +792,15 @@ class VexAimTab(QtWidgets.QWidget):
     def _run_inference(self, frames: list, mode: str):
         if self._inference_running or self._model is None:
             return
+
+        # ── prediction cache ──────────────────────────────────────────────────
+        # For RoboSoccer mode, reuse a recent high-confidence result for up to
+        # _PRED_CACHE_FRAMES ticks to reduce CPU load on low-power devices.
+        if mode == "robosoccer" and self._cache_remaining > 0 and self._cache_probs:
+            self._cache_remaining -= 1
+            self._on_inference_result(self._cache_probs, mode)
+            return
+
         self._inference_running = True
 
         worker = InferenceWorker(
@@ -801,6 +824,13 @@ class VexAimTab(QtWidgets.QWidget):
         best      = max(probs, key=probs.get)
         conf      = probs[best]
         threshold = self._conf_threshold.value()
+
+        # ── update prediction cache ───────────────────────────────────────────
+        if mode == "robosoccer" and conf >= _PRED_CACHE_CONF:
+            self._cache_probs     = dict(probs)
+            self._cache_remaining = _PRED_CACHE_FRAMES
+        elif mode == "robosoccer":
+            self._cache_remaining = 0
 
         self._pred_gesture.setText(best.replace("_", " "))
         self._pred_conf.setText(f"Confidence: {conf:.0%}")
