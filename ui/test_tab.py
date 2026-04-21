@@ -1738,6 +1738,11 @@ class TestTab(QtWidgets.QWidget):
             if conf >= threshold and best != "idle":
                 self._apply_rs_gesture(best)
                 self.soccer_gesture_applied.emit(best)
+                # A gesture just fired — clear the cache so that after the
+                # cooldown period ends, inference runs fresh from the radar
+                # buffer instead of re-firing the same gesture indefinitely.
+                self._cache_probs     = {}
+                self._cache_remaining = 0
 
         elif mode == "maze":
             maze_threshold = self._maze_conf_threshold.value()
@@ -1752,6 +1757,9 @@ class TestTab(QtWidgets.QWidget):
                 # Cooldown so we don't re-classify immediately after a gesture
                 self._maze_cooldown_ticks = 90    # ~3 s at 30 fps
                 self._frame_buf.clear()           # discard stale frames so they can't re-fire
+                # Clear cache — same reason as robosoccer: don't re-fire after cooldown
+                self._cache_probs     = {}
+                self._cache_remaining = 0
 
     def _on_inference_error(self, msg, mode=None):
         self._inference_running = False

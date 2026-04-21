@@ -843,6 +843,10 @@ class VexAimTab(QtWidgets.QWidget):
                 # has time to execute the command before we re-classify.
                 if best != "idle":
                     self._gesture_cooldown_until = time.time() + 3.0
+                    # Clear cache so fresh inference runs after cooldown instead
+                    # of the same gesture re-firing indefinitely.
+                    self._cache_probs     = {}
+                    self._cache_remaining = 0
             except Exception as e:
                 cmd_text = "error"
                 self._log(f"Command error: {e}")
