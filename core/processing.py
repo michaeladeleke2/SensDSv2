@@ -257,26 +257,37 @@ class SpectrogramProcessor:
 
     # ── on-demand display spectrogram (call from main-thread timer) ───────────
 
-    def get_streaming_result(self, n_cols: int = COLS_PER_FRAME) -> "np.ndarray | None":
+    def get_streaming_result(self, n_cols: int = COLS_PER_FRAME,
+                              n_frames: int = None,
+                              mti: bool = True) -> "np.ndarray | None":
         """
         Compute and return the latest spectrogram columns for display.
 
-        Call this from a QTimer on the main thread — NOT from the radar thread.
-        Takes a snapshot of the current deque (thread-safe via GIL) and runs
-        the full STFT pipeline.
+        Designed to be called from a BACKGROUND thread — never the radar
+        collection thread.  Takes a GIL-safe snapshot of the deque, then
+        runs the STFT pipeline.
 
         Args:
-            n_cols: number of columns to return (controls scroll speed).
-                    Default COLS_PER_FRAME keeps the same px/s scroll rate.
+            n_cols:   columns to return; controls scroll speed of the widget.
+            n_frames: if given, use only the last n_frames from the buffer.
+                      Fewer frames → much faster STFT (no history needed for
+                      display).  8 frames gives ~6× speedup vs. 30.
+            mti:      apply the Butterworth MTI highpass filter.  Set False
+                      for live display — saves 10-50 ms and is imperceptible
+                      visually.  Always True for inference.
         Returns:
             (STFT_NFFT, n_cols) float32 dB array, or None if too few frames.
         """
         n = len(self._buf)
         if n < 4:
             return None
-        # Snapshot the deque under the GIL so the radar thread can keep writing
-        stack    = np.stack(list(self._buf), axis=0)    # (n, n_ant, n_chirp, n_sample)
-        spect    = spectrogram_from_frames(stack)         # (STFT_NFFT, n_cols_total)
+        buf_list = list(self._buf)          # GIL-safe snapshot
+        if n_frames is not None and n_frames < len(buf_list):
+            buf_list = buf_list[-n_frames:]
+        if len(buf_list) < 4:
+            return None
+        stack    = np.stack(buf_list, axis=0)
+        spect    = spectrogram_from_frames(stack, mti=mti)
         spect_db = spectrogram_to_db(spect)
         n_emit   = min(n_cols, spect_db.shape[1])
         return spect_db[:, -n_emit:]

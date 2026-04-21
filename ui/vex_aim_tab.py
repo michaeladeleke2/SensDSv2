@@ -798,7 +798,7 @@ class VexAimTab(QtWidgets.QWidget):
         # _PRED_CACHE_FRAMES ticks to reduce CPU load on low-power devices.
         if mode == "robosoccer" and self._cache_remaining > 0 and self._cache_probs:
             self._cache_remaining -= 1
-            self._on_inference_result(self._cache_probs, mode)
+            self._on_inference_result(self._cache_probs, mode, _from_cache=True)
             return
 
         self._inference_running = True
@@ -819,18 +819,22 @@ class VexAimTab(QtWidgets.QWidget):
         self._infer_thread = thread
         self._infer_worker = worker
 
-    def _on_inference_result(self, probs: dict, mode: str):
+    def _on_inference_result(self, probs: dict, mode: str, _from_cache: bool = False):
         self._inference_running = False
         best      = max(probs, key=probs.get)
         conf      = probs[best]
         threshold = self._conf_threshold.value()
 
         # ── update prediction cache ───────────────────────────────────────────
-        if mode == "robosoccer" and conf >= _PRED_CACHE_CONF:
-            self._cache_probs     = dict(probs)
-            self._cache_remaining = _PRED_CACHE_FRAMES
-        elif mode == "robosoccer":
-            self._cache_remaining = 0
+        # Only update the cache from real inference results, NOT from cached
+        # calls — otherwise _cache_remaining is perpetually reset and the model
+        # never runs fresh inference after the first high-confidence result.
+        if not _from_cache:
+            if mode == "robosoccer" and conf >= _PRED_CACHE_CONF:
+                self._cache_probs     = dict(probs)
+                self._cache_remaining = _PRED_CACHE_FRAMES
+            elif mode == "robosoccer":
+                self._cache_remaining = 0
 
         self._pred_gesture.setText(best.replace("_", " "))
         self._pred_conf.setText(f"Confidence: {conf:.0%}")

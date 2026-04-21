@@ -1673,7 +1673,7 @@ class TestTab(QtWidgets.QWidget):
         # result for up to _PRED_CACHE_FRAMES ticks to reduce CPU load.
         if mode != "single" and self._cache_remaining > 0 and self._cache_probs:
             self._cache_remaining -= 1
-            self._on_inference_result(self._cache_probs, mode)
+            self._on_inference_result(self._cache_probs, mode, _from_cache=True)
             return
 
         self._last_frames = list(frames)   # remember for spectrogram preview
@@ -1695,7 +1695,7 @@ class TestTab(QtWidgets.QWidget):
         self._infer_thread = thread
         self._infer_worker = worker
 
-    def _on_inference_result(self, probs, mode):
+    def _on_inference_result(self, probs, mode, _from_cache=False):
         self._inference_running = False
         self._bars.set_probs(probs)
         best = max(probs, key=probs.get)
@@ -1704,13 +1704,15 @@ class TestTab(QtWidgets.QWidget):
         nice = best.replace("_", " ").title()
 
         # ── update prediction cache ───────────────────────────────────────────
-        # High-confidence continuous predictions are cached so the next
-        # _PRED_CACHE_FRAMES ticks can skip inference entirely, saving CPU.
-        if mode != "single" and conf >= _PRED_CACHE_CONF:
-            self._cache_probs     = dict(probs)
-            self._cache_remaining = _PRED_CACHE_FRAMES
-        elif mode != "single":
-            self._cache_remaining = 0
+        # Only update the cache when this result came from real inference, NOT
+        # when it came from the cache itself — otherwise _cache_remaining is
+        # perpetually reset and the model never runs fresh inference again.
+        if not _from_cache:
+            if mode != "single" and conf >= _PRED_CACHE_CONF:
+                self._cache_probs     = dict(probs)
+                self._cache_remaining = _PRED_CACHE_FRAMES
+            elif mode != "single":
+                self._cache_remaining = 0
 
         # Update spectrogram preview for every inference
         self._update_spectrogram_preview(self._last_frames)
