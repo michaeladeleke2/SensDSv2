@@ -803,6 +803,109 @@ class MazeWidget(QtWidgets.QWidget):
             pass
 
 
+# ─── gesture-window indicator ────────────────────────────────────────────────
+
+class _GestureWindowBar(QtWidgets.QFrame):
+    """
+    A slim status bar shown above the game area during continuous modes.
+    Tells the student exactly what state the inference pipeline is in so
+    they know when to perform a gesture vs. when to wait.
+
+    States
+    ──────
+    ready    (green)  — the window is open; do a gesture now
+    reading  (blue)   — inference is running; we're analysing what you did
+    cooldown (orange) — a gesture just fired; wait for the countdown
+    """
+
+    _CFG = {
+        "ready": {
+            "bg":     "#1a4228",
+            "border": "#27ae60",
+            "fg":     "#2ecc71",
+            "icon":   "🟢",
+            "text":   "Gesture window open — do a gesture now!",
+        },
+        "reading": {
+            "bg":     "#1a2a45",
+            "border": "#2980b9",
+            "fg":     "#5dade2",
+            "icon":   "🔵",
+            "text":   "Reading your gesture…",
+        },
+        "cooldown": {
+            "bg":     "#3d2000",
+            "border": "#e67e22",
+            "fg":     "#f39c12",
+            "icon":   "🟠",
+            "text":   "Wait — next window opens in",
+        },
+    }
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedHeight(42)
+        self.setVisible(False)
+
+        layout = QtWidgets.QHBoxLayout(self)
+        layout.setContentsMargins(14, 0, 14, 0)
+        layout.setSpacing(10)
+
+        self._icon_lbl = QtWidgets.QLabel()
+        self._icon_lbl.setFixedWidth(22)
+        layout.addWidget(self._icon_lbl)
+
+        self._text_lbl = QtWidgets.QLabel()
+        self._text_lbl.setStyleSheet("font-size: 13px; font-weight: bold; border: none;")
+        layout.addWidget(self._text_lbl, 1)
+
+        self._cd_lbl = QtWidgets.QLabel()
+        self._cd_lbl.setFixedWidth(46)
+        self._cd_lbl.setAlignment(
+            QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter
+        )
+        self._cd_lbl.setStyleSheet("font-size: 14px; font-family: monospace; font-weight: bold; border: none;")
+        layout.addWidget(self._cd_lbl)
+
+        self._state = ""
+
+    def _apply(self, state: str, countdown_s: float = 0.0):
+        if self._state == state and state != "cooldown":
+            return   # avoid unnecessary redraws when state hasn't changed
+        self._state = state
+        cfg = self._CFG[state]
+        self.setStyleSheet(
+            f"QFrame {{ background: {cfg['bg']}; border-radius: 8px;"
+            f" border: 1px solid {cfg['border']}; }}"
+        )
+        color_css = f"color: {cfg['fg']}; border: none;"
+        self._icon_lbl.setText(cfg["icon"])
+        self._icon_lbl.setStyleSheet(f"font-size: 15px; {color_css}")
+        self._text_lbl.setText(cfg["text"])
+        self._text_lbl.setStyleSheet(f"font-size: 13px; font-weight: bold; {color_css}")
+        if state == "cooldown":
+            self._cd_lbl.setText(f"{countdown_s:.1f}s")
+            self._cd_lbl.setStyleSheet(f"font-size: 14px; font-family: monospace; font-weight: bold; {color_css}")
+        else:
+            self._cd_lbl.setText("")
+
+    def show_ready(self):
+        self._apply("ready")
+        self.setVisible(True)
+
+    def show_reading(self):
+        self._apply("reading")
+        self.setVisible(True)
+
+    def show_cooldown(self, secs: float):
+        self._apply("cooldown", max(0.0, secs))
+        self.setVisible(True)
+
+    def hide_bar(self):
+        self.setVisible(False)
+        self._state = ""
+
+
 # ─── main tab ────────────────────────────────────────────────────────────────
 
 class TestTab(QtWidgets.QWidget):
@@ -1301,6 +1404,12 @@ class TestTab(QtWidgets.QWidget):
         self._game_stack.setCurrentIndex(0)
         layout.addWidget(self._game_stack, 3)
 
+        # ── Gesture window indicator ───────────────────────────────────────────
+        # Shown only while a continuous-mode game is running; tells the student
+        # whether to do a gesture, wait for cooldown, or watch inference run.
+        self._gesture_bar = _GestureWindowBar()
+        layout.addWidget(self._gesture_bar)
+
         # ── Bottom row: spectrogram preview + confidence bars ──────────────────
         bottom_row = QtWidgets.QHBoxLayout()
         bottom_row.setSpacing(8)
@@ -1541,6 +1650,7 @@ class TestTab(QtWidgets.QWidget):
         self._rs_stop_btn.setVisible(True)
         self._set_status("⚽ RoboSoccer running — do gestures to steer!", "#27ae60")
         self.stream_needed.emit(True)   # start radar streaming for this game
+        self._gesture_bar.show_ready()  # start with the window open
         self._rs_timer = QtCore.QTimer(self)
         self._rs_timer.timeout.connect(self._on_rs_tick)
         self._rs_timer.start(_TICK_MS)
@@ -1551,6 +1661,7 @@ class TestTab(QtWidgets.QWidget):
             self._rs_timer = None
         self._rs_start_btn.setVisible(True)
         self._rs_stop_btn.setVisible(False)
+        self._gesture_bar.hide_bar()
         self._set_status("RoboSoccer stopped.", "#888")
         self.stream_needed.emit(False)  # radar no longer needed
 
@@ -1578,6 +1689,8 @@ class TestTab(QtWidgets.QWidget):
             frames = list(self._frame_buf)
             if len(frames) >= 5:
                 self._run_inference(frames, mode="robosoccer")
+
+        self._update_gesture_bar(self._rs_cooldown_ticks)
 
     def _apply_rs_gesture(self, gesture):
         rx, ry = self._field.robot_pos
@@ -1643,6 +1756,7 @@ class TestTab(QtWidgets.QWidget):
         self._maze_stop_btn.setVisible(True)
         self._set_status("Maze running — do a gesture to move!", "#8e44ad")
         self.stream_needed.emit(True)   # start radar streaming for this game
+        self._gesture_bar.show_ready()  # start with the window open
         self._maze_timer = QtCore.QTimer(self)
         self._maze_timer.timeout.connect(self._on_maze_tick)
         self._maze_timer.start(_TICK_MS)
@@ -1653,6 +1767,7 @@ class TestTab(QtWidgets.QWidget):
             self._maze_timer = None
         self._maze_start_btn.setVisible(True)
         self._maze_stop_btn.setVisible(False)
+        self._gesture_bar.hide_bar()
         self._set_status("Maze stopped. Press Start to try again!", "#555")
         self.stream_needed.emit(False)  # radar no longer needed
 
@@ -1670,6 +1785,8 @@ class TestTab(QtWidgets.QWidget):
             frames = list(self._frame_buf)[-_MAZE_CAPTURE_FRAMES:]
             if len(frames) >= _MAZE_MIN_FRAMES:
                 self._run_inference(frames, mode="maze")
+
+        self._update_gesture_bar(self._maze_cooldown_ticks)
 
     def _maze_reset(self):
         if self._maze_timer and self._maze_timer.isActive():
@@ -1700,6 +1817,23 @@ class TestTab(QtWidgets.QWidget):
             "#27ae60",
         )
         self.maze_solved.emit(star_count, moves)
+
+    # ── gesture window indicator ──────────────────────────────────────────────
+
+    def _update_gesture_bar(self, cooldown_ticks: int):
+        """
+        Refresh the gesture window bar with the current pipeline state.
+
+        cooldown_ticks — the active cooldown counter for this mode
+                         (self._rs_cooldown_ticks or self._maze_cooldown_ticks)
+        """
+        if self._inference_running:
+            self._gesture_bar.show_reading()
+        elif cooldown_ticks > 0:
+            secs = cooldown_ticks * _TICK_MS / 1000.0
+            self._gesture_bar.show_cooldown(secs)
+        else:
+            self._gesture_bar.show_ready()
 
     # ── inference ─────────────────────────────────────────────────────────────
 
