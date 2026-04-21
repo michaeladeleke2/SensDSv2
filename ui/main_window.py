@@ -149,10 +149,17 @@ class _SpectrogramDisplayWorker(QtCore.QObject):
         super().__init__()
         self._processor  = processor
         self._stop_event = threading.Event()
+        # When set, the run loop skips STFT computation and sleeps instead.
+        # This lets us free CPU for inference without tearing down the thread.
+        self._paused     = threading.Event()
 
     @QtCore.pyqtSlot()
     def run(self):
         while not self._stop_event.is_set():
+            if self._paused.is_set():
+                # Paused — just sleep and re-check; no STFT, no emit.
+                self._stop_event.wait(0.1)
+                continue
             t0 = _time.monotonic()
             try:
                 result = self._processor.get_streaming_result(
@@ -166,6 +173,14 @@ class _SpectrogramDisplayWorker(QtCore.QObject):
                 pass   # never let the display thread crash the app
             elapsed = _time.monotonic() - t0
             self._stop_event.wait(max(0.02, self._INTERVAL_S - elapsed))
+
+    def pause(self):
+        """Stop emitting frames (e.g. Test tab is active). Zero CPU cost."""
+        self._paused.set()
+
+    def resume(self):
+        """Resume emitting frames (e.g. Visualize tab is active again)."""
+        self._paused.clear()
 
     def stop(self):
         self._stop_event.set()
@@ -212,6 +227,16 @@ class RadarBridge(QtCore.QObject):
         thread.start()
         self._display_worker = worker
         self._display_thread = thread
+
+    def pause_display(self):
+        """Pause the spectrogram display worker (frees CPU for inference)."""
+        if self._display_worker is not None:
+            self._display_worker.pause()
+
+    def resume_display(self):
+        """Resume the spectrogram display worker."""
+        if self._display_worker is not None:
+            self._display_worker.resume()
 
     def stop(self):
         if self._display_worker is not None:
@@ -406,6 +431,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self._test_tab.maze_solved.connect(self._gamification_mgr.on_maze_solved)
 
         self._tabs.tabBarClicked.connect(self._on_tab_clicked)
+        # currentChanged fires after the tab has actually switched — use it to
+        # pause/resume the spectrogram display worker based on which tab is visible.
+        self._tabs.currentChanged.connect(self._on_tab_changed)
         return self._tabs
 
     def _init_gamification_toast(self):
@@ -458,6 +486,20 @@ class MainWindow(QtWidgets.QMainWindow):
             "Complete the previous steps first — this tab will unlock as you progress."
         )
 
+    # Tab indices that show a live spectrogram and need the display worker running.
+    # All other tabs (Collect=1, Train=2, Test=3, Results=4, Resources=6) pause it
+    # so the display thread doesn't compete with inference for CPU time.
+    _DISPLAY_TABS = frozenset({0, 5})   # 0=Visualize, 5=VEX AIM
+
+    def _on_tab_changed(self, index: int):
+        """Pause or resume the spectrogram display based on the active tab."""
+        if self._bridge is None:
+            return
+        if index in self._DISPLAY_TABS:
+            self._bridge.resume_display()
+        else:
+            self._bridge.pause_display()
+
     def _show_soft_lock(self, msg):
         dlg = QtWidgets.QMessageBox(self)
         dlg.setWindowTitle("Not ready yet")
@@ -485,6 +527,8 @@ class MainWindow(QtWidgets.QMainWindow):
             self._bridge.frame_ready.connect(self._vex_tab.on_spectrogram_frame)
             self._bridge.error_occurred.connect(self._on_radar_error)
             self._bridge.start()
+            # Apply the correct pause state for whichever tab is currently visible.
+            self._on_tab_changed(self._tabs.currentIndex())
             self._set_connected(True)
         except Exception as e:
             self._show_error(str(e))
