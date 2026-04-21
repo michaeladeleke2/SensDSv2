@@ -349,6 +349,10 @@ def _apply_gesture(robot, gesture: str) -> str:
 
 class VexAimTab(QtWidgets.QWidget):
 
+    # True  = start capturing frames (session beginning)
+    # False = stop capturing frames  (session ended)
+    stream_needed = QtCore.pyqtSignal(bool)
+
     def __init__(self):
         super().__init__()
         self.setObjectName("vex_root")
@@ -389,6 +393,13 @@ class VexAimTab(QtWidgets.QWidget):
 
     def on_spectrogram_frame(self, batch: np.ndarray):
         self._spectrogram.update_frame(batch)
+
+    def stop_if_running(self):
+        """
+        Stop any active session and signal that the radar is no longer needed.
+        Called by MainWindow when the user navigates away from the VEX AIM tab.
+        """
+        self._on_stop()
 
     # ── UI construction ───────────────────────────────────────────────────────
 
@@ -660,6 +671,7 @@ class VexAimTab(QtWidgets.QWidget):
         self._start_btn.setVisible(True)
         self._stop_btn.setVisible(False)
         self._set_robot_disconnected()
+        self.stream_needed.emit(False)  # robot gone — stop radar too
 
     # ── model loading ─────────────────────────────────────────────────────────
 
@@ -748,6 +760,7 @@ class VexAimTab(QtWidgets.QWidget):
         self._stop_btn.setVisible(False)
         self._refresh_start_btn()
         self._log("Stopped.")
+        self.stream_needed.emit(False)  # radar no longer needed
 
     # ── single command ────────────────────────────────────────────────────────
 
@@ -757,6 +770,7 @@ class VexAimTab(QtWidgets.QWidget):
         self._start_btn.setEnabled(False)
         dur_ms = int(self._duration.value() * 1000)
         self._log(f"Capturing for {self._duration.value():.1f} s…")
+        self.stream_needed.emit(True)   # start radar for this capture window
         QtCore.QTimer.singleShot(dur_ms, self._single_capture_done)
 
     def _single_capture_done(self):
@@ -765,6 +779,7 @@ class VexAimTab(QtWidgets.QWidget):
         if len(frames) < 5:
             self._log("Too few frames — connect the radar and try again.")
             self._refresh_start_btn()
+            self.stream_needed.emit(False)   # abort — stop radar
             return
         self._log(f"Running inference on {len(frames)} frames…")
         self._run_inference(frames, mode="single")
@@ -775,6 +790,7 @@ class VexAimTab(QtWidgets.QWidget):
         self._log("Starting RoboSoccer — robot moving forward…")
         self._start_btn.setVisible(False)
         self._stop_btn.setVisible(True)
+        self.stream_needed.emit(True)   # start radar streaming for this session
 
         worker = DriveWorker(self._robot, self._frame_buf)
         thread = QtCore.QThread(self)
@@ -872,8 +888,10 @@ class VexAimTab(QtWidgets.QWidget):
 
         if mode == "single":
             self._refresh_start_btn()
+            self.stream_needed.emit(False)  # single capture done — stop radar
 
     def _on_inference_error(self, msg: str):
         self._inference_running = False
         self._log(f"Inference error: {msg.split(chr(10))[0]}")
         self._refresh_start_btn()
+        self.stream_needed.emit(False)  # stop radar on error

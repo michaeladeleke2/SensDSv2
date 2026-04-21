@@ -817,6 +817,10 @@ class TestTab(QtWidgets.QWidget):
     soccer_gesture_applied = QtCore.pyqtSignal(str)
     # maze won (stars, moves)
     maze_solved = QtCore.pyqtSignal(int, int)
+    # ── radar streaming control ───────────────────────────────────────────────
+    # True  = start capturing frames (game/capture session beginning)
+    # False = stop capturing frames  (game/capture session ended)
+    stream_needed = QtCore.pyqtSignal(bool)
 
     _MODE_SINGLE = 0
     _MODE_RS = 1
@@ -879,6 +883,20 @@ class TestTab(QtWidgets.QWidget):
         self._frame_buf.append(frame)
         if self._capturing:
             self._capture_frames.append(frame)
+
+    def stop_all_games(self):
+        """
+        Stop any active game session and signal that the radar stream is no
+        longer needed.  Called by MainWindow when the user navigates away from
+        the Test tab so the radar stops capturing immediately.
+        """
+        if self._rs_timer and self._rs_timer.isActive():
+            self._stop_robosoccer()
+        if self._maze_timer and self._maze_timer.isActive():
+            self._stop_maze()
+        if self._capturing:
+            self._capturing = False
+            self.stream_needed.emit(False)
 
     def refresh(self):
         pass
@@ -1491,6 +1509,7 @@ class TestTab(QtWidgets.QWidget):
         self._capturing = True
         self._capture_btn.setEnabled(False)
         self._set_status("🔴 Capturing… do your gesture now!", "#c0392b")
+        self.stream_needed.emit(True)   # start radar for this capture window
         QtCore.QTimer.singleShot(
             int(self._duration.value() * 1000), self._capture_done
         )
@@ -1501,6 +1520,7 @@ class TestTab(QtWidgets.QWidget):
         if len(frames) < 5:
             self._capture_btn.setEnabled(True)
             self._set_status("⚠️ No radar frames — is the radar connected?", "#c0392b")
+            self.stream_needed.emit(False)   # abort — nothing to infer
             return
         self._set_status("🔍 Running inference…", "#e67e22")
         self._run_inference(frames, mode="single")
@@ -1514,9 +1534,13 @@ class TestTab(QtWidgets.QWidget):
         self._rs_burst_remaining = 0
         self._inference_running = False
         self._rs_cooldown_ticks = 0
+        self._cache_probs = {}
+        self._cache_remaining = 0
+        self._last_infer_done = 0.0
         self._rs_start_btn.setVisible(False)
         self._rs_stop_btn.setVisible(True)
         self._set_status("⚽ RoboSoccer running — do gestures to steer!", "#27ae60")
+        self.stream_needed.emit(True)   # start radar streaming for this game
         self._rs_timer = QtCore.QTimer(self)
         self._rs_timer.timeout.connect(self._on_rs_tick)
         self._rs_timer.start(_TICK_MS)
@@ -1528,6 +1552,7 @@ class TestTab(QtWidgets.QWidget):
         self._rs_start_btn.setVisible(True)
         self._rs_stop_btn.setVisible(False)
         self._set_status("RoboSoccer stopped.", "#888")
+        self.stream_needed.emit(False)  # radar no longer needed
 
     def _on_rs_tick(self):
         self._rs_tick_count += 1
@@ -1611,9 +1636,13 @@ class TestTab(QtWidgets.QWidget):
         self._maze_tick_count = 0
         self._maze_cooldown_ticks = 0
         self._inference_running = False
+        self._cache_probs = {}
+        self._cache_remaining = 0
+        self._last_infer_done = 0.0
         self._maze_start_btn.setVisible(False)
         self._maze_stop_btn.setVisible(True)
         self._set_status("Maze running — do a gesture to move!", "#8e44ad")
+        self.stream_needed.emit(True)   # start radar streaming for this game
         self._maze_timer = QtCore.QTimer(self)
         self._maze_timer.timeout.connect(self._on_maze_tick)
         self._maze_timer.start(_TICK_MS)
@@ -1625,6 +1654,7 @@ class TestTab(QtWidgets.QWidget):
         self._maze_start_btn.setVisible(True)
         self._maze_stop_btn.setVisible(False)
         self._set_status("Maze stopped. Press Start to try again!", "#555")
+        self.stream_needed.emit(False)  # radar no longer needed
 
     def _on_maze_tick(self):
         self._maze_tick_count += 1
@@ -1750,6 +1780,7 @@ class TestTab(QtWidgets.QWidget):
             self._animate_single(best)
             self._confirm_widget.setVisible(True)
             self.gesture_tested.emit(best, conf)
+            self.stream_needed.emit(False)  # capture + inference done — stop radar
 
         elif mode == "robosoccer":
             self.prediction_made.emit(best, conf, threshold, None)
@@ -1787,6 +1818,7 @@ class TestTab(QtWidgets.QWidget):
         current = mode if mode is not None else self._mode
         if current == "single" or current == self._MODE_SINGLE:
             self._capture_btn.setEnabled(True)
+            self.stream_needed.emit(False)  # single capture failed — stop radar
         # maze and robosoccer are continuous — they keep running on their timer
 
     # ── difficulty picker ─────────────────────────────────────────────────────

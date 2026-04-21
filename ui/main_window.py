@@ -187,58 +187,101 @@ class _SpectrogramDisplayWorker(QtCore.QObject):
 
 
 class RadarBridge(QtCore.QObject):
+    """
+    Owns the radar hardware connection and the spectrogram display pipeline.
+
+    The key design principle: the radar only captures frames when something
+    actually needs them.  Tabs signal their needs via start_stream() /
+    stop_stream() rather than leaving the hardware running constantly.
+
+    start_stream(with_display=True)
+        Open the radar hardware, begin the 10-fps frame loop, and
+        (if with_display=True) start the background display worker.
+        Safe to call when already streaming — only updates the display state.
+
+    stop_stream()
+        Tear down the display worker and close the radar hardware.
+        The SpectrogramProcessor's frame deque is cleared so a future
+        start_stream() begins with a clean buffer.
+    """
+
     frame_ready     = QtCore.pyqtSignal(np.ndarray)
     raw_frame_ready = QtCore.pyqtSignal(np.ndarray)
     error_occurred  = QtCore.pyqtSignal(str)
 
     def __init__(self):
         super().__init__()
-        # streaming=True: push_frame_raw() is called from the radar thread
-        # (deque-only, ~microseconds).  The display worker reads the deque
-        # independently on its own thread at 5 Hz.
-        self._processor = SpectrogramProcessor(streaming=True)
-        self._stream = RadarStream(
-            on_frame=self._on_frame,
-            on_error=self._on_error,
-        )
-        self._display_worker: _SpectrogramDisplayWorker = None
-        self._display_thread: QtCore.QThread = None
+        self._processor      = SpectrogramProcessor(streaming=True)
+        self._stream         = RadarStream(on_frame=self._on_frame,
+                                           on_error=self._on_error)
+        self._display_worker : _SpectrogramDisplayWorker = None
+        self._display_thread : QtCore.QThread             = None
+        self._streaming      = False
+
+    # ── radar-thread callbacks ────────────────────────────────────────────────
 
     def _on_frame(self, frame):
-        # ── Radar background thread ──────────────────────────────────────────
-        # Only emit the raw frame and push it into the deque accumulator.
-        # Zero STFT work here → radar thread never falls behind at 10 fps.
+        # Called from the radar background thread — ONLY touch the deque.
         self.raw_frame_ready.emit(frame)
         self._processor.push_frame_raw(frame)
 
     def _on_error(self, msg):
         self.error_occurred.emit(msg)
 
-    def start(self):
-        self._stream.start()
-        # Spin up the dedicated display thread
+    # ── public streaming control ──────────────────────────────────────────────
+
+    @property
+    def is_streaming(self) -> bool:
+        return self._streaming
+
+    def start_stream(self, with_display: bool = False):
+        """
+        Open the radar hardware (if not already open) and start capturing.
+        with_display=True  → also run the spectrogram display worker.
+        with_display=False → raw frames flow to tabs; no STFT for display.
+        """
+        if not self._streaming:
+            # Clear any stale frames left over from a previous session so the
+            # first inference always sees fresh data.
+            self._processor._buf.clear()
+            try:
+                self._stream.start()
+            except Exception as e:
+                self.error_occurred.emit(str(e))
+                return
+            self._streaming = True
+
+        # Sync display worker to the requested state
+        if with_display and self._display_worker is None:
+            self._start_display_worker()
+        elif not with_display and self._display_worker is not None:
+            self._stop_display_worker()
+
+    def stop_stream(self):
+        """Stop the radar capture and tear down the display worker."""
+        if not self._streaming:
+            return
+        self._stop_display_worker()
+        self._stream.stop()
+        self._streaming = False
+
+    def shutdown(self):
+        """Full teardown — stop stream and release all resources."""
+        self.stop_stream()
+
+    # ── display worker helpers ────────────────────────────────────────────────
+
+    def _start_display_worker(self):
         worker = _SpectrogramDisplayWorker(self._processor)
         thread = QtCore.QThread()
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
-        # Cross-thread signal: frame_ready on the worker → frame_ready on self
-        # Qt auto-detects the thread boundary and posts it correctly.
         worker.frame_ready.connect(self.frame_ready)
         thread.start()
         self._display_worker = worker
         self._display_thread = thread
 
-    def pause_display(self):
-        """Pause the spectrogram display worker (frees CPU for inference)."""
-        if self._display_worker is not None:
-            self._display_worker.pause()
-
-    def resume_display(self):
-        """Resume the spectrogram display worker."""
-        if self._display_worker is not None:
-            self._display_worker.resume()
-
-    def stop(self):
+    def _stop_display_worker(self):
         if self._display_worker is not None:
             self._display_worker.stop()
         if self._display_thread is not None:
@@ -246,7 +289,6 @@ class RadarBridge(QtCore.QObject):
             self._display_thread.wait(1000)
         self._display_worker = None
         self._display_thread = None
-        self._stream.stop()
 
 
 class PlaceholderTab(QtWidgets.QWidget):
@@ -298,6 +340,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._connected = False
         self._elapsed = 0
         self._hint_index = 0
+        self._prev_tab_index = 0   # track which tab we left so we can stop its game
         self._gamification_mgr = GamificationManager(self)
         self.setStyleSheet(_app_style(app_colors(), compact=self._compact))
         self._setup_ui()
@@ -430,9 +473,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self._test_tab.soccer_gesture_applied.connect(self._gamification_mgr.on_soccer_gesture)
         self._test_tab.maze_solved.connect(self._gamification_mgr.on_maze_solved)
 
+        # Wire stream_needed signals so each tab controls its own radar streaming
+        self._test_tab.stream_needed.connect(self._on_test_stream_needed)
+        self._vex_tab.stream_needed.connect(self._on_vex_stream_needed)
+
         self._tabs.tabBarClicked.connect(self._on_tab_clicked)
-        # currentChanged fires after the tab has actually switched — use it to
-        # pause/resume the spectrogram display worker based on which tab is visible.
+        # currentChanged fires after the tab has actually switched
         self._tabs.currentChanged.connect(self._on_tab_changed)
         return self._tabs
 
@@ -486,19 +532,68 @@ class MainWindow(QtWidgets.QMainWindow):
             "Complete the previous steps first — this tab will unlock as you progress."
         )
 
-    # Tab indices that show a live spectrogram and need the display worker running.
-    # All other tabs (Collect=1, Train=2, Test=3, Results=4, Resources=6) pause it
-    # so the display thread doesn't compete with inference for CPU time.
-    _DISPLAY_TABS = frozenset({0, 5})   # 0=Visualize, 5=VEX AIM
+    # Tabs that auto-stream when active: {tab_index: with_display}
+    # Visualize (0) needs the display worker; Collect (1) only needs raw frames.
+    _AUTO_STREAM = {0: True, 1: False}
 
-    def _on_tab_changed(self, index: int):
-        """Pause or resume the spectrogram display based on the active tab."""
+    def _on_tab_changed(self, new_index: int):
+        """
+        Called after the tab switch completes.
+
+        1. Stop any active game/session on the tab we're leaving — this also
+           emits stream_needed(False) so the radar stops if a game was running.
+        2. Apply the correct streaming state for the newly visible tab.
+        """
+        old_index = self._prev_tab_index
+        self._prev_tab_index = new_index
+
+        # ── clean up the tab we just left ────────────────────────────────────
+        if old_index == 3:   # Test tab — stop any running game
+            self._test_tab.stop_all_games()
+        elif old_index == 5:  # VEX AIM — stop any running session
+            self._vex_tab.stop_if_running()
+
+        # ── apply streaming for the newly active tab ──────────────────────────
+        self._apply_stream_for_tab(new_index)
+
+    def _apply_stream_for_tab(self, index: int):
+        """
+        Start or stop the radar stream based on which tab is active.
+
+        Auto-stream tabs (Visualize, Collect): radar runs while you're there.
+        Game tabs (Test, VEX AIM): games signal stream_needed themselves.
+        All other tabs: radar is silent.
+        """
         if self._bridge is None:
             return
-        if index in self._DISPLAY_TABS:
-            self._bridge.resume_display()
+        if index in self._AUTO_STREAM:
+            self._bridge.start_stream(with_display=self._AUTO_STREAM[index])
         else:
-            self._bridge.pause_display()
+            # For game tabs (3, 5) the stop_all_games / stop_if_running calls
+            # above already emit stream_needed(False) which handles the stop.
+            # For non-streaming tabs (Train, Results, Resources) stop directly.
+            if index not in (3, 5):
+                self._bridge.stop_stream()
+
+    # ── stream_needed handlers (called from tab signals) ─────────────────────
+
+    def _on_test_stream_needed(self, needed: bool):
+        """Test tab: stream runs during Capture/RoboSoccer/Maze; stops when done."""
+        if self._bridge is None:
+            return
+        if needed:
+            self._bridge.start_stream(with_display=False)
+        else:
+            self._bridge.stop_stream()
+
+    def _on_vex_stream_needed(self, needed: bool):
+        """VEX AIM tab: stream + display during a session; stops when done."""
+        if self._bridge is None:
+            return
+        if needed:
+            self._bridge.start_stream(with_display=True)
+        else:
+            self._bridge.stop_stream()
 
     def _show_soft_lock(self, msg):
         dlg = QtWidgets.QMessageBox(self)
@@ -520,28 +615,35 @@ class MainWindow(QtWidgets.QMainWindow):
         self._clear_error()
         try:
             self._bridge = RadarBridge()
+            # frame_ready  → live spectrogram display + VEX AIM display
             self._bridge.frame_ready.connect(self._spectrogram.update_frame)
+            self._bridge.frame_ready.connect(self._vex_tab.on_spectrogram_frame)
+            # raw_frame_ready → frame buffers in each tab (always connected,
+            # but only arrive when the radar is actively streaming)
             self._bridge.raw_frame_ready.connect(self._collect_tab.on_raw_frame)
             self._bridge.raw_frame_ready.connect(self._test_tab.on_raw_frame)
             self._bridge.raw_frame_ready.connect(self._vex_tab.on_raw_frame)
-            self._bridge.frame_ready.connect(self._vex_tab.on_spectrogram_frame)
             self._bridge.error_occurred.connect(self._on_radar_error)
-            self._bridge.start()
-            # Apply the correct pause state for whichever tab is currently visible.
-            self._on_tab_changed(self._tabs.currentIndex())
             self._set_connected(True)
+            # Start streaming immediately if the current tab is an auto-stream tab
+            # (Visualize or Collect).  Game tabs start streaming when their own
+            # Start button is clicked.
+            self._apply_stream_for_tab(self._tabs.currentIndex())
         except Exception as e:
             self._show_error(str(e))
 
     def _on_disconnect(self):
         if self._bridge:
-            self._bridge.stop()
+            # Stop any running game first so their stream_needed(False) fires
+            self._test_tab.stop_all_games()
+            self._vex_tab.stop_if_running()
+            self._bridge.shutdown()
             self._bridge = None
         self._set_connected(False)
 
     def _on_radar_error(self, msg):
         self._show_error(msg)
-        self._set_connected(False)
+        self._on_disconnect()   # full cleanup, not just UI update
 
     def _set_connected(self, connected):
         self._connected = connected
@@ -580,5 +682,5 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def closeEvent(self, event):
         if self._bridge:
-            self._bridge.stop()
+            self._bridge.shutdown()
         event.accept()
