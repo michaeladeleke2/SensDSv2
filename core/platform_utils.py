@@ -6,6 +6,8 @@ Centralises device detection so every worker (train, inference, vex-aim) uses
 the same logic instead of duplicating cuda/mps/cpu checks everywhere.
 """
 
+import sys
+
 
 def get_device():
     """
@@ -42,3 +44,28 @@ def device_label() -> str:
         except Exception:
             return "cuda"
     return name
+
+
+def min_infer_gap_s() -> float:
+    """
+    Minimum seconds to wait after one inference completes before the next
+    one starts in continuous modes (RoboSoccer, Maze Game).
+
+    Purpose: prevents the inference thread from running back-to-back and
+    continuously pegging the CPU, which starves the Qt game-animation timers
+    and causes stuttering on low-power devices.
+
+    Mac (MPS / Apple Silicon): inference is ~10× faster than CPU-only, so
+    a short gap keeps the game snappy.
+
+    Windows / CPU-only (Surface Pro 9, Intel): each inference call takes
+    1–3 s; the longer gap gives the CPU breathing room between calls so
+    the game timer and display thread stay smooth.
+
+    CUDA users get a short gap — GPU inference is fast and runs independently.
+    """
+    dev = get_device()
+    if dev is not None and str(dev) in ("cuda", "mps"):
+        return 0.3   # hardware-accelerated — inference is fast
+    # CPU-only path: Windows Surface or any CPU-only machine
+    return 1.5

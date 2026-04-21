@@ -45,6 +45,11 @@ MODELS_ROOT = os.path.join(os.path.expanduser("~"), "SensDSv2_data", "models")
 _PRED_CACHE_CONF   = 0.8   # reuse prediction when confidence exceeds this
 _PRED_CACHE_FRAMES = 2     # ticks to reuse before re-running inference
 
+# Minimum seconds between consecutive inference calls in RoboSoccer mode.
+# Prevents back-to-back inference from saturating the CPU on Surface Pro 9.
+from core.platform_utils import min_infer_gap_s as _min_infer_gap_s
+_MIN_INFER_GAP_S = _min_infer_gap_s()
+
 # ─── stylesheet ───────────────────────────────────────────────────────────────
 
 VEX_STYLE = """
@@ -162,9 +167,10 @@ def _frames_to_pil(frames: list):
         if stack.ndim == 3:
             stack = stack[:, np.newaxis]
         spect    = spectrogram_from_frames(stack)   # (STFT_NFFT, n_cols) magnitude
-        spect_db = spectrogram_to_db(spect)         # (STFT_NFFT, n_cols) dB, clipped at -20 dB
-        smoothed   = gaussian_filter(spect_db.astype(np.float64), sigma=[1.0, 0.5])
-        clipped    = np.clip(smoothed, DB_MIN, DB_MAX).astype(np.float32)
+        spect_db = spectrogram_to_db(spect)         # (STFT_NFFT, n_cols) float32 dB
+        # Keep float32 — avoids the 2× memory + compute cost of a float64 round-trip.
+        smoothed   = gaussian_filter(spect_db, sigma=[1.0, 0.5])
+        clipped    = np.clip(smoothed, DB_MIN, DB_MAX)
         normalized = (clipped - DB_MIN) / (DB_MAX - DB_MIN)
         colored    = np.ascontiguousarray(_apply_jet(normalized)[::-1])
         return Image.fromarray(colored, "RGB").resize((224, 224), Image.BILINEAR)
@@ -244,7 +250,9 @@ class InferenceWorker(QtCore.QObject):
             inputs = self._hf_processor(images=img, return_tensors="pt")
             if device is not None:
                 inputs = {k: v.to(device) for k, v in inputs.items()}
-            with torch.no_grad():
+            # inference_mode is faster than no_grad: also disables autograd
+            # version tracking — safe for pure inference.
+            with torch.inference_mode():
                 logits = self._model(**inputs).logits
             probs = torch.softmax(logits[0], dim=0).cpu().numpy()
             self.result.emit(
@@ -368,6 +376,7 @@ class VexAimTab(QtWidgets.QWidget):
 
         self._cache_probs: dict    = {}   # last high-confidence prediction probs
         self._cache_remaining: int = 0    # ticks left to reuse the cached result
+        self._last_infer_done: float = 0.0  # monotonic time when last real inference completed
 
         self._setup_ui()
 
@@ -784,7 +793,9 @@ class VexAimTab(QtWidgets.QWidget):
 
     @QtCore.pyqtSlot(list)
     def _on_rs_infer_trigger(self, frames: list):
-        if not self._inference_running and time.time() >= self._gesture_cooldown_until:
+        if (not self._inference_running
+                and time.time() >= self._gesture_cooldown_until
+                and (time.monotonic() - self._last_infer_done) >= _MIN_INFER_GAP_S):
             self._run_inference(frames, mode="robosoccer")
 
     # ── inference ─────────────────────────────────────────────────────────────
@@ -825,11 +836,10 @@ class VexAimTab(QtWidgets.QWidget):
         conf      = probs[best]
         threshold = self._conf_threshold.value()
 
-        # ── update prediction cache ───────────────────────────────────────────
-        # Only update the cache from real inference results, NOT from cached
-        # calls — otherwise _cache_remaining is perpetually reset and the model
-        # never runs fresh inference after the first high-confidence result.
+        # ── update prediction cache + inference gap timer ─────────────────────
+        # Only update from real inference results, NOT from cached re-plays.
         if not _from_cache:
+            self._last_infer_done = time.monotonic()   # start the gap timer
             if mode == "robosoccer" and conf >= _PRED_CACHE_CONF:
                 self._cache_probs     = dict(probs)
                 self._cache_remaining = _PRED_CACHE_FRAMES
