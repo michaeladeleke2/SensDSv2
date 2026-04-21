@@ -130,23 +130,45 @@ def resource_path(relative_path):
 
 
 class RadarBridge(QtCore.QObject):
-    frame_ready = QtCore.pyqtSignal(np.ndarray)
+    frame_ready     = QtCore.pyqtSignal(np.ndarray)
     raw_frame_ready = QtCore.pyqtSignal(np.ndarray)
-    error_occurred = QtCore.pyqtSignal(str)
+    error_occurred  = QtCore.pyqtSignal(str)
+
+    # Display the spectrogram at 5 Hz (every 200 ms).
+    # Each tick emits COLS_PER_FRAME × 2 columns so the scroll speed
+    # matches the original 10-fps rate: 20 cols/s either way.
+    _DISPLAY_INTERVAL_MS = 200   # 5 Hz
+    _DISPLAY_COLS        = 4     # cols per tick  (200 ms × 20 cols/s)
 
     def __init__(self):
         super().__init__()
-        # streaming=True: processor only emits the new STFT columns per frame
-        # so the rolling buffer advances correctly without duplicating data.
+        # streaming=True: frames are accumulated; get_streaming_result() is
+        # called from _display_timer on the main thread so the radar thread
+        # never runs the heavy STFT computation and stays at exactly 10 fps.
         self._processor = SpectrogramProcessor(streaming=True)
         self._stream = RadarStream(
             on_frame=self._on_frame,
-            on_error=self._on_error
+            on_error=self._on_error,
         )
+        # Main-thread timer drives the display update — completely independent
+        # of how fast the radar delivers frames.
+        self._display_timer = QtCore.QTimer(self)
+        self._display_timer.setInterval(self._DISPLAY_INTERVAL_MS)
+        self._display_timer.timeout.connect(self._update_display)
 
     def _on_frame(self, frame):
+        # ── Radar background thread ──────────────────────────────────────────
+        # Only emit the raw frame and push it into the accumulator.
+        # NO STFT computation here — that would block this thread and cause
+        # the rolling buffer to fall behind (→ frozen display on slow hardware).
         self.raw_frame_ready.emit(frame)
-        result = self._processor.push_frame(frame)
+        self._processor.push_frame_raw(frame)
+
+    def _update_display(self):
+        # ── Main (Qt event-loop) thread ──────────────────────────────────────
+        # Run the STFT and feed the result to the SpectrogramWidget.
+        # Called at 5 Hz by _display_timer so it never races with itself.
+        result = self._processor.get_streaming_result(n_cols=self._DISPLAY_COLS)
         if result is not None:
             self.frame_ready.emit(result)
 
@@ -155,8 +177,10 @@ class RadarBridge(QtCore.QObject):
 
     def start(self):
         self._stream.start()
+        self._display_timer.start()
 
     def stop(self):
+        self._display_timer.stop()
         self._stream.stop()
 
 

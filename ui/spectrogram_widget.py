@@ -86,5 +86,7 @@ class SpectrogramWidget(pg.GraphicsLayoutWidget):
             self._buffer[:, self._col] = col
             self._col = (self._col + 1) % BUFFER_WIDTH
         display = np.roll(self._buffer, -self._col, axis=1)
-        display = gaussian_filter(display.astype(np.float64), sigma=[1.5, 0.8]).astype(np.float32)
+        # Keep float32 throughout — scipy gaussian_filter handles it natively
+        # and avoids the 2× memory + compute cost of a float64 round-trip.
+        display = gaussian_filter(display, sigma=[1.5, 0.8])
         self._img.setImage(display.T, autoLevels=False)

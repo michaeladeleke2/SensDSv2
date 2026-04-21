@@ -207,8 +207,10 @@ class SpectrogramProcessor:
     using the exact same algorithm as processing_utils.spectrogram().
 
     streaming=True  (RadarBridge → SpectrogramWidget live display)
-        Maintains a rolling frame deque.  Every new frame emits COLS_PER_FRAME
-        new STFT columns so the display updates at full 10 fps.
+        Maintains a rolling frame deque.  The radar thread only accumulates
+        frames via push_frame_raw(); the heavy STFT is triggered separately
+        via get_streaming_result() from a main-thread QTimer.  This keeps the
+        radar collection thread lightweight so it never falls behind.
 
     streaming=False  (_frames_to_pil → inference)
         Accumulates EPOCH_FRAMES frames then returns the full
@@ -221,36 +223,63 @@ class SpectrogramProcessor:
         n = max(buffer_frames, EPOCH_FRAMES)
         self._buf: deque = deque(maxlen=n)
 
-    def push_frame(self, frame: np.ndarray):
+    # ── lightweight frame accumulation (radar thread safe) ────────────────────
+
+    def push_frame_raw(self, frame: np.ndarray):
         """
+        Accumulate one raw frame WITHOUT running any computation.
+
+        Safe to call from the radar background thread — only touches the
+        deque, which is GIL-protected for single append operations.
+
         Args:
-            frame: (n_ant, n_chirp, n_sample) — one raw frame.
-                   (n_chirp, n_sample) treated as single-antenna.
-        Returns:
-            dB spectrogram slice or None.
+            frame: (n_ant, n_chirp, n_sample) or (n_chirp, n_sample)
         """
         if frame.ndim == 2:
             frame = frame[np.newaxis]
         self._buf.append(frame.copy())
 
-        if self._streaming:
-            return self._emit_streaming()
-        else:
+    def push_frame(self, frame: np.ndarray):
+        """
+        Accumulate a frame and optionally compute the spectrogram.
+
+        For streaming=True, computation is deferred — call get_streaming_result()
+        from a timer instead.  Kept for backwards compatibility.
+
+        Returns:
+            dB spectrogram slice (streaming mode: never — always returns None)
+            or full epoch spectrogram (batch mode) or None if not ready.
+        """
+        self.push_frame_raw(frame)
+        if not self._streaming:
             return self._emit_batch()
+        return None   # streaming: caller uses get_streaming_result() via timer
 
-    # ── streaming ─────────────────────────────────────────────────────────────
+    # ── on-demand display spectrogram (call from main-thread timer) ───────────
 
-    def _emit_streaming(self):
+    def get_streaming_result(self, n_cols: int = COLS_PER_FRAME) -> "np.ndarray | None":
+        """
+        Compute and return the latest spectrogram columns for display.
+
+        Call this from a QTimer on the main thread — NOT from the radar thread.
+        Takes a snapshot of the current deque (thread-safe via GIL) and runs
+        the full STFT pipeline.
+
+        Args:
+            n_cols: number of columns to return (controls scroll speed).
+                    Default COLS_PER_FRAME keeps the same px/s scroll rate.
+        Returns:
+            (STFT_NFFT, n_cols) float32 dB array, or None if too few frames.
+        """
         n = len(self._buf)
-        if n < 4:           # need enough chirps for at least one STFT window
+        if n < 4:
             return None
+        # Snapshot the deque under the GIL so the radar thread can keep writing
         stack    = np.stack(list(self._buf), axis=0)    # (n, n_ant, n_chirp, n_sample)
-        spect    = spectrogram_from_frames(stack)         # (STFT_NFFT, n_cols)
+        spect    = spectrogram_from_frames(stack)         # (STFT_NFFT, n_cols_total)
         spect_db = spectrogram_to_db(spect)
-
-        # Return only the newest COLS_PER_FRAME columns
-        n_emit = min(COLS_PER_FRAME, spect_db.shape[1])
-        return spect_db[:, -n_emit:]                      # (STFT_NFFT, COLS_PER_FRAME)
+        n_emit   = min(n_cols, spect_db.shape[1])
+        return spect_db[:, -n_emit:]
 
     # ── batch / inference ─────────────────────────────────────────────────────
 
