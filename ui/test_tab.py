@@ -8,7 +8,7 @@ from scipy.ndimage import gaussian_filter
 from PyQt6 import QtWidgets, QtCore, QtGui
 from core.processing import SpectrogramProcessor
 from core.platform_utils import min_infer_gap_s
-from ui import HintCard, _scrollable_left
+from ui import HintCard, _scrollable_left, GestureWindowBar
 from ui.spectrogram_widget import DB_MIN, DB_MAX, FREQ_BINS, MAX_VELOCITY, FRAME_TIME_S
 
 
@@ -803,109 +803,6 @@ class MazeWidget(QtWidgets.QWidget):
             pass
 
 
-# ─── gesture-window indicator ────────────────────────────────────────────────
-
-class _GestureWindowBar(QtWidgets.QFrame):
-    """
-    A slim status bar shown above the game area during continuous modes.
-    Tells the student exactly what state the inference pipeline is in so
-    they know when to perform a gesture vs. when to wait.
-
-    States
-    ──────
-    ready    (green)  — the window is open; do a gesture now
-    reading  (blue)   — inference is running; we're analysing what you did
-    cooldown (orange) — a gesture just fired; wait for the countdown
-    """
-
-    _CFG = {
-        "ready": {
-            "bg":     "#1a4228",
-            "border": "#27ae60",
-            "fg":     "#2ecc71",
-            "icon":   "🟢",
-            "text":   "Gesture window open — do a gesture now!",
-        },
-        "reading": {
-            "bg":     "#1a2a45",
-            "border": "#2980b9",
-            "fg":     "#5dade2",
-            "icon":   "🔵",
-            "text":   "Reading your gesture…",
-        },
-        "cooldown": {
-            "bg":     "#3d2000",
-            "border": "#e67e22",
-            "fg":     "#f39c12",
-            "icon":   "🟠",
-            "text":   "Wait — next window opens in",
-        },
-    }
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setFixedHeight(42)
-        self.setVisible(False)
-
-        layout = QtWidgets.QHBoxLayout(self)
-        layout.setContentsMargins(14, 0, 14, 0)
-        layout.setSpacing(10)
-
-        self._icon_lbl = QtWidgets.QLabel()
-        self._icon_lbl.setFixedWidth(22)
-        layout.addWidget(self._icon_lbl)
-
-        self._text_lbl = QtWidgets.QLabel()
-        self._text_lbl.setStyleSheet("font-size: 13px; font-weight: bold; border: none;")
-        layout.addWidget(self._text_lbl, 1)
-
-        self._cd_lbl = QtWidgets.QLabel()
-        self._cd_lbl.setFixedWidth(46)
-        self._cd_lbl.setAlignment(
-            QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter
-        )
-        self._cd_lbl.setStyleSheet("font-size: 14px; font-family: monospace; font-weight: bold; border: none;")
-        layout.addWidget(self._cd_lbl)
-
-        self._state = ""
-
-    def _apply(self, state: str, countdown_s: float = 0.0):
-        if self._state == state and state != "cooldown":
-            return   # avoid unnecessary redraws when state hasn't changed
-        self._state = state
-        cfg = self._CFG[state]
-        self.setStyleSheet(
-            f"QFrame {{ background: {cfg['bg']}; border-radius: 8px;"
-            f" border: 1px solid {cfg['border']}; }}"
-        )
-        color_css = f"color: {cfg['fg']}; border: none;"
-        self._icon_lbl.setText(cfg["icon"])
-        self._icon_lbl.setStyleSheet(f"font-size: 15px; {color_css}")
-        self._text_lbl.setText(cfg["text"])
-        self._text_lbl.setStyleSheet(f"font-size: 13px; font-weight: bold; {color_css}")
-        if state == "cooldown":
-            self._cd_lbl.setText(f"{countdown_s:.1f}s")
-            self._cd_lbl.setStyleSheet(f"font-size: 14px; font-family: monospace; font-weight: bold; {color_css}")
-        else:
-            self._cd_lbl.setText("")
-
-    def show_ready(self):
-        self._apply("ready")
-        self.setVisible(True)
-
-    def show_reading(self):
-        self._apply("reading")
-        self.setVisible(True)
-
-    def show_cooldown(self, secs: float):
-        self._apply("cooldown", max(0.0, secs))
-        self.setVisible(True)
-
-    def hide_bar(self):
-        self.setVisible(False)
-        self._state = ""
-
-
 # ─── main tab ────────────────────────────────────────────────────────────────
 
 class TestTab(QtWidgets.QWidget):
@@ -1407,7 +1304,7 @@ class TestTab(QtWidgets.QWidget):
         # ── Gesture window indicator ───────────────────────────────────────────
         # Shown only while a continuous-mode game is running; tells the student
         # whether to do a gesture, wait for cooldown, or watch inference run.
-        self._gesture_bar = _GestureWindowBar()
+        self._gesture_bar = GestureWindowBar()
         layout.addWidget(self._gesture_bar)
 
         # ── Bottom row: spectrogram preview + confidence bars ──────────────────

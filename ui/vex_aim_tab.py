@@ -33,7 +33,7 @@ from scipy.ndimage import gaussian_filter
 from PyQt6 import QtWidgets, QtCore, QtGui
 from core.processing import SpectrogramProcessor
 from ui.spectrogram_widget import SpectrogramWidget, DB_MIN, DB_MAX
-from ui import HintCard, _scrollable_left
+from ui import HintCard, _scrollable_left, GestureWindowBar
 
 # Ensure the project root is importable so "from vex.aim import Robot" resolves.
 _PROJECT_ROOT = os.path.normpath(os.path.join(os.path.dirname(__file__), ".."))
@@ -375,6 +375,7 @@ class VexAimTab(QtWidgets.QWidget):
         self._drive_worker: DriveWorker = None
 
         self._gesture_cooldown_until = 0.0  # time.time() threshold for next RS inference
+        self._bar_timer: QtCore.QTimer | None = None  # drives gesture bar countdown
         self._model_load_thread = None
         self._model_load_worker = None
 
@@ -539,6 +540,11 @@ class VexAimTab(QtWidgets.QWidget):
         self._spectrogram = SpectrogramWidget()
         self._spectrogram.setMinimumHeight(200)
         lyt.addWidget(self._spectrogram, 2)
+
+        # ── Gesture window indicator ───────────────────────────────────────────
+        # Hidden until RoboSoccer starts; ticks every 200 ms for smooth countdown.
+        self._gesture_bar = GestureWindowBar()
+        lyt.addWidget(self._gesture_bar)
 
         pred_frame = QtWidgets.QFrame()
         pred_frame.setStyleSheet(
@@ -741,6 +747,11 @@ class VexAimTab(QtWidgets.QWidget):
             self._start_robosoccer()
 
     def _on_stop(self):
+        if self._bar_timer is not None:
+            self._bar_timer.stop()
+            self._bar_timer = None
+        self._gesture_bar.hide_bar()
+
         if self._drive_worker is not None:
             self._drive_worker.stop()
         if self._drive_thread is not None:
@@ -792,6 +803,13 @@ class VexAimTab(QtWidgets.QWidget):
         self._stop_btn.setVisible(True)
         self.stream_needed.emit(True)   # start radar streaming for this session
 
+        # Start the gesture bar and a 200 ms refresh timer for smooth countdown.
+        self._gesture_bar.show_ready()
+        self._bar_timer = QtCore.QTimer(self)
+        self._bar_timer.setInterval(200)
+        self._bar_timer.timeout.connect(self._update_gesture_bar)
+        self._bar_timer.start()
+
         worker = DriveWorker(self._robot, self._frame_buf)
         thread = QtCore.QThread(self)
         worker.moveToThread(thread)
@@ -813,6 +831,16 @@ class VexAimTab(QtWidgets.QWidget):
                 and time.time() >= self._gesture_cooldown_until
                 and (time.monotonic() - self._last_infer_done) >= _MIN_INFER_GAP_S):
             self._run_inference(frames, mode="robosoccer")
+
+    def _update_gesture_bar(self):
+        """Refresh the gesture window bar — called every 200 ms by _bar_timer."""
+        remaining = max(0.0, self._gesture_cooldown_until - time.time())
+        if self._inference_running:
+            self._gesture_bar.show_reading()
+        elif remaining > 0:
+            self._gesture_bar.show_cooldown(remaining)
+        else:
+            self._gesture_bar.show_ready()
 
     # ── inference ─────────────────────────────────────────────────────────────
 
