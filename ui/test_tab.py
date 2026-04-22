@@ -909,6 +909,52 @@ class MazeWidget(QtWidgets.QWidget):
                            QtCore.Qt.AlignmentFlag.AlignCenter,
                            f"{self._moves} moves — press Reset for a new maze!")
 
+            # ── Stop / Go / Reading corner badge (drawn last, on top) ──────────
+            if self._overlay and not self._won:
+                badge_w = max(100, w // 4)
+                badge_h = 54
+                bx = w - badge_w - 10
+                by = 10
+                if self._overlay == "go":
+                    bg_col = QtGui.QColor(39, 174, 96, 230)
+                    line1, line2 = "🟢 GO!", ""
+                elif self._overlay == "stop":
+                    bg_col = QtGui.QColor(192, 57, 43, 230)
+                    line1, line2 = "⛔ WAIT", f"{self._overlay_secs:.1f}s"
+                elif self._overlay == "reading":
+                    bg_col = QtGui.QColor(41, 128, 185, 210)
+                    line1, line2 = "🔵 Reading…", ""
+                else:
+                    bg_col = None
+                    line1 = line2 = ""
+
+                if bg_col:
+                    p.setBrush(bg_col)
+                    p.setPen(QtCore.Qt.PenStyle.NoPen)
+                    p.drawRoundedRect(bx, by, badge_w, badge_h, 10, 10)
+                    p.setPen(QtCore.Qt.GlobalColor.white)
+                    if line2:
+                        fnt1 = QtGui.QFont()
+                        fnt1.setPixelSize(17)
+                        fnt1.setBold(True)
+                        p.setFont(fnt1)
+                        p.drawText(QtCore.QRectF(bx, by, badge_w, badge_h * 0.54),
+                                   QtCore.Qt.AlignmentFlag.AlignCenter, line1)
+                        fnt2 = QtGui.QFont()
+                        fnt2.setPixelSize(16)
+                        fnt2.setBold(True)
+                        p.setFont(fnt2)
+                        p.drawText(QtCore.QRectF(bx, by + badge_h * 0.50,
+                                                 badge_w, badge_h * 0.50),
+                                   QtCore.Qt.AlignmentFlag.AlignCenter, line2)
+                    else:
+                        fnt1 = QtGui.QFont()
+                        fnt1.setPixelSize(18)
+                        fnt1.setBold(True)
+                        p.setFont(fnt1)
+                        p.drawText(QtCore.QRectF(bx, by, badge_w, badge_h),
+                                   QtCore.Qt.AlignmentFlag.AlignCenter, line1)
+
         except Exception:
             pass
 
