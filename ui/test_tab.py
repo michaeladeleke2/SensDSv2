@@ -41,8 +41,8 @@ _SINGLE_PUSH_PX = 40
 _SINGLE_PUSH_STEPS = 20
 
 # ── maze constants ────────────────────────────────────────────────────────────
-_MAZE_ROWS = 5
-_MAZE_COLS = 7
+_MAZE_ROWS = 3
+_MAZE_COLS = 4
 _MAZE_SEED = 42
 
 # Direction bits
@@ -2048,7 +2048,7 @@ class TestTab(QtWidgets.QWidget):
 
     # ── difficulty picker ─────────────────────────────────────────────────────
 
-    _DIFFICULTY_SIZES = [(4, 5), (5, 7), (7, 9)]   # Easy, Medium, Hard
+    _DIFFICULTY_SIZES = [(3, 4), (4, 5), (5, 7)]   # Easy, Medium, Hard
 
     def _set_difficulty(self, idx: int):
         self._maze_difficulty = idx
