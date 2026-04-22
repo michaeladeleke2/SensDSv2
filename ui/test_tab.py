@@ -841,27 +841,50 @@ class MazeWidget(QtWidgets.QWidget):
                 p.fillRect(pcx + 2, pcy + 2, cell_sz - 3, cell_sz - 3,
                            QtGui.QColor(231, 76, 60, 140))
 
-            # Robot emoji
+            # Robot emoji — slightly smaller to give arrow more room
             rfnt = QtGui.QFont()
-            rfnt.setPixelSize(max(8, int(cell_sz * 0.50)))
+            rfnt.setPixelSize(max(8, int(cell_sz * 0.48)))
             p.setFont(rfnt)
             p.setPen(QtGui.QColor("#2c3e50"))
-            emoji_h = int(cell_sz * 0.60)
+            emoji_h = int(cell_sz * 0.55)
             p.drawText(
                 QtCore.QRectF(pcx + 1, pcy + 2, cell_sz - 2, emoji_h),
                 QtCore.Qt.AlignmentFlag.AlignCenter, "🤖",
             )
 
-            # Direction arrow — large, bright orange, high-contrast
+            # Bottom zone: arrow (left 65 %) + state dot (right 35 %)
+            arrow_area_h = cell_sz - emoji_h - 2
+            arrow_zone_w = max(1, int(cell_sz * 0.65))
+            dot_zone_w   = max(1, cell_sz - 2 - arrow_zone_w)
+
+            # Direction arrow — larger, bright orange, high-contrast
             afnt = QtGui.QFont()
-            afnt.setPixelSize(max(10, int(cell_sz * 0.38)))
+            afnt.setPixelSize(max(10, int(cell_sz * 0.48)))
             afnt.setBold(True)
             p.setFont(afnt)
-            p.setPen(QtGui.QColor("#FF8C00"))   # deep orange — pops on light cells
+            p.setPen(QtGui.QColor("#FF8C00"))
             p.drawText(
-                QtCore.QRectF(pcx + 1, pcy + emoji_h, cell_sz - 2, cell_sz - emoji_h - 2),
+                QtCore.QRectF(pcx + 1, pcy + emoji_h, arrow_zone_w, arrow_area_h),
                 QtCore.Qt.AlignmentFlag.AlignCenter, _ARROW.get(self._facing, "→"),
             )
+
+            # State dot — green (go), red (stop/wait), blue (reading)
+            if self._overlay and not self._won:
+                if self._overlay == "go":
+                    dot_col = QtGui.QColor("#27ae60")
+                elif self._overlay == "stop":
+                    dot_col = QtGui.QColor("#c0392b")
+                elif self._overlay == "reading":
+                    dot_col = QtGui.QColor("#2980b9")
+                else:
+                    dot_col = None
+                if dot_col:
+                    dot_r  = max(4, int(cell_sz * 0.11))
+                    dot_cx = pcx + arrow_zone_w + dot_zone_w // 2
+                    dot_cy = pcy + emoji_h + arrow_area_h // 2
+                    p.setBrush(dot_col)
+                    p.setPen(QtCore.Qt.PenStyle.NoPen)
+                    p.drawEllipse(QtCore.QPointF(dot_cx, dot_cy), dot_r, dot_r)
 
             # Win overlay
             if self._won:
@@ -886,53 +909,6 @@ class MazeWidget(QtWidgets.QWidget):
                            QtCore.Qt.AlignmentFlag.AlignCenter,
                            f"{self._moves} moves — press Reset for a new maze!")
 
-            # ── Stop / Go / Reading overlay badge ──────────────────────────────
-            # Drawn last so it sits on top of the grid and win overlay.
-            if self._overlay and not self._won:
-                badge_w = max(100, w // 4)
-                badge_h = 54
-                bx = w - badge_w - 10
-                by = 10
-                if self._overlay == "go":
-                    bg_col = QtGui.QColor(39, 174, 96, 230)
-                    line1, line2 = "🟢 GO!", ""
-                elif self._overlay == "stop":
-                    bg_col = QtGui.QColor(192, 57, 43, 230)
-                    line1, line2 = "⛔ WAIT", f"{self._overlay_secs:.1f}s"
-                elif self._overlay == "reading":
-                    bg_col = QtGui.QColor(41, 128, 185, 210)
-                    line1, line2 = "🔵 Reading…", ""
-                else:
-                    bg_col = None
-                    line1 = line2 = ""
-
-                if bg_col:
-                    p.setBrush(bg_col)
-                    p.setPen(QtCore.Qt.PenStyle.NoPen)
-                    p.drawRoundedRect(bx, by, badge_w, badge_h, 10, 10)
-                    p.setPen(QtCore.Qt.GlobalColor.white)
-
-                    if line2:
-                        fnt1 = QtGui.QFont()
-                        fnt1.setPixelSize(17)
-                        fnt1.setBold(True)
-                        p.setFont(fnt1)
-                        p.drawText(QtCore.QRectF(bx, by, badge_w, badge_h * 0.54),
-                                   QtCore.Qt.AlignmentFlag.AlignCenter, line1)
-                        fnt2 = QtGui.QFont()
-                        fnt2.setPixelSize(16)
-                        fnt2.setBold(True)
-                        p.setFont(fnt2)
-                        p.drawText(QtCore.QRectF(bx, by + badge_h * 0.50,
-                                                 badge_w, badge_h * 0.50),
-                                   QtCore.Qt.AlignmentFlag.AlignCenter, line2)
-                    else:
-                        fnt1 = QtGui.QFont()
-                        fnt1.setPixelSize(18)
-                        fnt1.setBold(True)
-                        p.setFont(fnt1)
-                        p.drawText(QtCore.QRectF(bx, by, badge_w, badge_h),
-                                   QtCore.Qt.AlignmentFlag.AlignCenter, line1)
         except Exception:
             pass
 
