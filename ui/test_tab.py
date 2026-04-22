@@ -1983,12 +1983,24 @@ class TestTab(QtWidgets.QWidget):
                 # buffer instead of re-firing the same gesture indefinitely.
                 self._cache_probs     = {}
                 self._cache_remaining = 0
+            else:
+                # idle (or below threshold) — still apply the same pause so the
+                # player always sees the full Ready → Reading → Wait cycle
+                self._rs_cooldown_ticks = 90   # ~3 s at 30 fps
+                self._frame_buf.clear()
+                self._cache_probs     = {}
+                self._cache_remaining = 0
 
         elif mode == "maze":
             maze_threshold = self._maze_conf_threshold.value()
             if conf < maze_threshold or best == "idle":
-                # Not confident enough or idle — show quietly, keep listening
+                # idle or below threshold — show quietly and apply the same
+                # cooldown so the player sees the full Ready → Reading → Wait cycle
                 self._set_status(f"Listening… ({nice} {conf:.0%})", "#888")
+                self._maze_cooldown_ticks = 90   # ~3 s at 30 fps
+                self._frame_buf.clear()
+                self._cache_probs     = {}
+                self._cache_remaining = 0
             else:
                 feedback = self._maze_widget.apply_gesture(best)
                 self._update_facing_label()
