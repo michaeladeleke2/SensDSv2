@@ -337,6 +337,14 @@ class SoccerFieldWidget(QtWidgets.QWidget):
         self._by = 0.0
         self._trail: deque = deque(maxlen=_TRAIL_MAX)
         self._ready = False
+        self._overlay: str  = ""    # "go" | "stop" | "reading" | ""
+        self._overlay_secs: float = 0.0
+
+    def set_overlay(self, state: str, secs: float = 0.0):
+        """Set the stop/go/reading badge overlay drawn over the field."""
+        self._overlay      = state
+        self._overlay_secs = secs
+        self.update()
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -457,12 +465,80 @@ class SoccerFieldWidget(QtWidgets.QWidget):
                 QtCore.Qt.AlignmentFlag.AlignCenter, "🤖",
             )
 
-            # Direction indicator — white arrow tip extending from robot center
+            # Direction arrow — thick, bright yellow, with filled arrowhead
             a = math.radians(self._heading)
-            ex = self._rx + math.cos(a) * (_ROBOT_R + 8)
-            ey = self._ry + math.sin(a) * (_ROBOT_R + 8)
-            p.setPen(QtGui.QPen(QtCore.Qt.GlobalColor.white, 2))
-            p.drawLine(QtCore.QPointF(self._rx, self._ry), QtCore.QPointF(ex, ey))
+            shaft_start = _ROBOT_R * 0.5       # start from just inside robot
+            shaft_end   = _ROBOT_R + 22        # tip well beyond robot edge
+            sx   = self._rx + math.cos(a) * shaft_start
+            sy   = self._ry + math.sin(a) * shaft_start
+            tip_x = self._rx + math.cos(a) * shaft_end
+            tip_y = self._ry + math.sin(a) * shaft_end
+
+            arrow_col = QtGui.QColor("#FFD700")   # bright gold — pops on green field
+            p.setPen(QtGui.QPen(arrow_col, 4, QtCore.Qt.PenStyle.SolidLine,
+                                QtCore.Qt.PenCapStyle.RoundCap))
+            p.drawLine(QtCore.QPointF(sx, sy), QtCore.QPointF(tip_x, tip_y))
+
+            # Filled arrowhead triangle
+            head_len, head_w = 13, 7
+            lhx = tip_x - math.cos(a) * head_len + math.sin(a) * head_w
+            lhy = tip_y - math.sin(a) * head_len - math.cos(a) * head_w
+            rhx = tip_x - math.cos(a) * head_len - math.sin(a) * head_w
+            rhy = tip_y - math.sin(a) * head_len + math.cos(a) * head_w
+            p.setBrush(arrow_col)
+            p.setPen(QtCore.Qt.PenStyle.NoPen)
+            p.drawPolygon(QtGui.QPolygonF([
+                QtCore.QPointF(tip_x, tip_y),
+                QtCore.QPointF(lhx, lhy),
+                QtCore.QPointF(rhx, rhy),
+            ]))
+
+            # ── Stop / Go / Reading overlay badge ──────────────────────────────
+            if self._overlay:
+                badge_w = max(110, w // 4)
+                badge_h = 54
+                bx = w - badge_w - 10
+                by = 10
+                if self._overlay == "go":
+                    bg_col = QtGui.QColor(39, 174, 96, 230)
+                    line1, line2 = "🟢 GO!", ""
+                elif self._overlay == "stop":
+                    bg_col = QtGui.QColor(192, 57, 43, 230)
+                    line1, line2 = "⛔ WAIT", f"{self._overlay_secs:.1f}s"
+                elif self._overlay == "reading":
+                    bg_col = QtGui.QColor(41, 128, 185, 210)
+                    line1, line2 = "🔵 Reading…", ""
+                else:
+                    bg_col = None
+                    line1 = line2 = ""
+
+                if bg_col:
+                    p.setBrush(bg_col)
+                    p.setPen(QtCore.Qt.PenStyle.NoPen)
+                    p.drawRoundedRect(bx, by, badge_w, badge_h, 10, 10)
+                    p.setPen(QtCore.Qt.GlobalColor.white)
+
+                    if line2:
+                        fnt1 = QtGui.QFont()
+                        fnt1.setPixelSize(17)
+                        fnt1.setBold(True)
+                        p.setFont(fnt1)
+                        p.drawText(QtCore.QRectF(bx, by, badge_w, badge_h * 0.54),
+                                   QtCore.Qt.AlignmentFlag.AlignCenter, line1)
+                        fnt2 = QtGui.QFont()
+                        fnt2.setPixelSize(16)
+                        fnt2.setBold(True)
+                        p.setFont(fnt2)
+                        p.drawText(QtCore.QRectF(bx, by + badge_h * 0.50,
+                                                 badge_w, badge_h * 0.50),
+                                   QtCore.Qt.AlignmentFlag.AlignCenter, line2)
+                    else:
+                        fnt1 = QtGui.QFont()
+                        fnt1.setPixelSize(18)
+                        fnt1.setBold(True)
+                        p.setFont(fnt1)
+                        p.drawText(QtCore.QRectF(bx, by, badge_w, badge_h),
+                                   QtCore.Qt.AlignmentFlag.AlignCenter, line1)
         except Exception:
             pass
 
@@ -562,12 +638,22 @@ class MazeWidget(QtWidgets.QWidget):
         self._bump = False
         self._moves = 0
 
+        # Overlay state for stop/go badge
+        self._overlay: str  = ""
+        self._overlay_secs: float = 0.0
+
         # Timer for clearing bump flash
         self._bump_timer = QtCore.QTimer(self)
         self._bump_timer.setSingleShot(True)
         self._bump_timer.timeout.connect(self._clear_bump)
 
         self.setMinimumSize(200, 150)
+
+    def set_overlay(self, state: str, secs: float = 0.0):
+        """Set the stop/go/reading badge overlay drawn over the maze."""
+        self._overlay      = state
+        self._overlay_secs = secs
+        self.update()
 
     def _clear_bump(self):
         self._bump = False
@@ -766,12 +852,12 @@ class MazeWidget(QtWidgets.QWidget):
                 QtCore.Qt.AlignmentFlag.AlignCenter, "🤖",
             )
 
-            # Direction arrow
+            # Direction arrow — large, bright orange, high-contrast
             afnt = QtGui.QFont()
-            afnt.setPixelSize(max(6, int(cell_sz * 0.20)))
+            afnt.setPixelSize(max(10, int(cell_sz * 0.38)))
             afnt.setBold(True)
             p.setFont(afnt)
-            p.setPen(QtGui.QColor("#2980b9"))
+            p.setPen(QtGui.QColor("#FF8C00"))   # deep orange — pops on light cells
             p.drawText(
                 QtCore.QRectF(pcx + 1, pcy + emoji_h, cell_sz - 2, cell_sz - emoji_h - 2),
                 QtCore.Qt.AlignmentFlag.AlignCenter, _ARROW.get(self._facing, "→"),
@@ -799,6 +885,54 @@ class MazeWidget(QtWidgets.QWidget):
                 p.drawText(QtCore.QRectF(ox, oy + grid_h * 0.70, grid_w, grid_h * 0.30),
                            QtCore.Qt.AlignmentFlag.AlignCenter,
                            f"{self._moves} moves — press Reset for a new maze!")
+
+            # ── Stop / Go / Reading overlay badge ──────────────────────────────
+            # Drawn last so it sits on top of the grid and win overlay.
+            if self._overlay and not self._won:
+                badge_w = max(100, w // 4)
+                badge_h = 54
+                bx = w - badge_w - 10
+                by = 10
+                if self._overlay == "go":
+                    bg_col = QtGui.QColor(39, 174, 96, 230)
+                    line1, line2 = "🟢 GO!", ""
+                elif self._overlay == "stop":
+                    bg_col = QtGui.QColor(192, 57, 43, 230)
+                    line1, line2 = "⛔ WAIT", f"{self._overlay_secs:.1f}s"
+                elif self._overlay == "reading":
+                    bg_col = QtGui.QColor(41, 128, 185, 210)
+                    line1, line2 = "🔵 Reading…", ""
+                else:
+                    bg_col = None
+                    line1 = line2 = ""
+
+                if bg_col:
+                    p.setBrush(bg_col)
+                    p.setPen(QtCore.Qt.PenStyle.NoPen)
+                    p.drawRoundedRect(bx, by, badge_w, badge_h, 10, 10)
+                    p.setPen(QtCore.Qt.GlobalColor.white)
+
+                    if line2:
+                        fnt1 = QtGui.QFont()
+                        fnt1.setPixelSize(17)
+                        fnt1.setBold(True)
+                        p.setFont(fnt1)
+                        p.drawText(QtCore.QRectF(bx, by, badge_w, badge_h * 0.54),
+                                   QtCore.Qt.AlignmentFlag.AlignCenter, line1)
+                        fnt2 = QtGui.QFont()
+                        fnt2.setPixelSize(16)
+                        fnt2.setBold(True)
+                        p.setFont(fnt2)
+                        p.drawText(QtCore.QRectF(bx, by + badge_h * 0.50,
+                                                 badge_w, badge_h * 0.50),
+                                   QtCore.Qt.AlignmentFlag.AlignCenter, line2)
+                    else:
+                        fnt1 = QtGui.QFont()
+                        fnt1.setPixelSize(18)
+                        fnt1.setBold(True)
+                        p.setFont(fnt1)
+                        p.drawText(QtCore.QRectF(bx, by, badge_w, badge_h),
+                                   QtCore.Qt.AlignmentFlag.AlignCenter, line1)
         except Exception:
             pass
 
@@ -1548,6 +1682,7 @@ class TestTab(QtWidgets.QWidget):
         self._set_status("⚽ RoboSoccer running — do gestures to steer!", "#27ae60")
         self.stream_needed.emit(True)   # start radar streaming for this game
         self._gesture_bar.show_ready()  # start with the window open
+        self._field.set_overlay("go")   # show GO badge on the field
         self._rs_timer = QtCore.QTimer(self)
         self._rs_timer.timeout.connect(self._on_rs_tick)
         self._rs_timer.start(_TICK_MS)
@@ -1559,6 +1694,7 @@ class TestTab(QtWidgets.QWidget):
         self._rs_start_btn.setVisible(True)
         self._rs_stop_btn.setVisible(False)
         self._gesture_bar.hide_bar()
+        self._field.set_overlay("")     # clear field badge
         self._set_status("RoboSoccer stopped.", "#888")
         self.stream_needed.emit(False)  # radar no longer needed
 
@@ -1588,6 +1724,7 @@ class TestTab(QtWidgets.QWidget):
                 self._run_inference(frames, mode="robosoccer")
 
         self._update_gesture_bar(self._rs_cooldown_ticks)
+        self._update_field_overlay(self._rs_cooldown_ticks)
 
     def _apply_rs_gesture(self, gesture):
         rx, ry = self._field.robot_pos
@@ -1652,8 +1789,9 @@ class TestTab(QtWidgets.QWidget):
         self._maze_start_btn.setVisible(False)
         self._maze_stop_btn.setVisible(True)
         self._set_status("Maze running — do a gesture to move!", "#8e44ad")
-        self.stream_needed.emit(True)   # start radar streaming for this game
-        self._gesture_bar.show_ready()  # start with the window open
+        self.stream_needed.emit(True)    # start radar streaming for this game
+        self._gesture_bar.show_ready()   # start with the window open
+        self._maze_widget.set_overlay("go")  # show GO badge on the maze
         self._maze_timer = QtCore.QTimer(self)
         self._maze_timer.timeout.connect(self._on_maze_tick)
         self._maze_timer.start(_TICK_MS)
@@ -1665,6 +1803,7 @@ class TestTab(QtWidgets.QWidget):
         self._maze_start_btn.setVisible(True)
         self._maze_stop_btn.setVisible(False)
         self._gesture_bar.hide_bar()
+        self._maze_widget.set_overlay("")   # clear maze badge
         self._set_status("Maze stopped. Press Start to try again!", "#555")
         self.stream_needed.emit(False)  # radar no longer needed
 
@@ -1684,6 +1823,7 @@ class TestTab(QtWidgets.QWidget):
                 self._run_inference(frames, mode="maze")
 
         self._update_gesture_bar(self._maze_cooldown_ticks)
+        self._update_maze_overlay(self._maze_cooldown_ticks)
 
     def _maze_reset(self):
         if self._maze_timer and self._maze_timer.isActive():
@@ -1731,6 +1871,26 @@ class TestTab(QtWidgets.QWidget):
             self._gesture_bar.show_cooldown(secs)
         else:
             self._gesture_bar.show_ready()
+
+    def _update_field_overlay(self, cooldown_ticks: int):
+        """Refresh the stop/go badge drawn inside the soccer field widget."""
+        if self._inference_running:
+            self._field.set_overlay("reading")
+        elif cooldown_ticks > 0:
+            secs = cooldown_ticks * _TICK_MS / 1000.0
+            self._field.set_overlay("stop", secs)
+        else:
+            self._field.set_overlay("go")
+
+    def _update_maze_overlay(self, cooldown_ticks: int):
+        """Refresh the stop/go badge drawn inside the maze widget."""
+        if self._inference_running:
+            self._maze_widget.set_overlay("reading")
+        elif cooldown_ticks > 0:
+            secs = cooldown_ticks * _TICK_MS / 1000.0
+            self._maze_widget.set_overlay("stop", secs)
+        else:
+            self._maze_widget.set_overlay("go")
 
     # ── inference ─────────────────────────────────────────────────────────────
 
