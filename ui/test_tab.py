@@ -1998,8 +1998,9 @@ class TestTab(QtWidgets.QWidget):
             self.stream_needed.emit(False)  # capture + inference done — stop radar
 
         elif mode == "robosoccer":
-            self.prediction_made.emit(best, conf, threshold, None, "RoboSoccer")
             if conf >= threshold and best != "idle":
+                # Gesture fired — treat the acted-on prediction as confirmed ground truth
+                self.prediction_made.emit(best, conf, threshold, best, "RoboSoccer")
                 self._apply_rs_gesture(best)
                 self.soccer_gesture_applied.emit(best)
                 # A gesture just fired — clear the cache so that after the
@@ -2008,8 +2009,9 @@ class TestTab(QtWidgets.QWidget):
                 self._cache_probs     = {}
                 self._cache_remaining = 0
             else:
-                # idle (or below threshold) — still apply the same pause so the
-                # player always sees the full Ready → Reading → Wait cycle
+                # idle (or below threshold) — record without actual so it appears
+                # in history but doesn't skew the confusion matrix
+                self.prediction_made.emit(best, conf, threshold, None, "RoboSoccer")
                 self._rs_cooldown_ticks = 90   # ~3 s at 30 fps
                 self._frame_buf.clear()
                 self._cache_probs     = {}
@@ -2017,16 +2019,18 @@ class TestTab(QtWidgets.QWidget):
 
         elif mode == "maze":
             maze_threshold = self._maze_conf_threshold.value()
-            self.prediction_made.emit(best, conf, maze_threshold, None, "Maze")
             if conf < maze_threshold or best == "idle":
-                # idle or below threshold — show quietly and apply the same
-                # cooldown so the player sees the full Ready → Reading → Wait cycle
+                # idle or below threshold — record without actual so it appears
+                # in history but doesn't skew the confusion matrix
+                self.prediction_made.emit(best, conf, maze_threshold, None, "Maze")
                 self._set_status(f"Listening… ({nice} {conf:.0%})", "#888")
                 self._maze_cooldown_ticks = 90   # ~3 s at 30 fps
                 self._frame_buf.clear()
                 self._cache_probs     = {}
                 self._cache_remaining = 0
             else:
+                # Gesture fired — treat the acted-on prediction as confirmed ground truth
+                self.prediction_made.emit(best, conf, maze_threshold, best, "Maze")
                 feedback = self._maze_widget.apply_gesture(best)
                 self._update_facing_label()
                 color = "#27ae60" if "wall" not in feedback.lower() else "#e74c3c"
