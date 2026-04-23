@@ -495,9 +495,9 @@ class SoccerFieldWidget(QtWidgets.QWidget):
 
             # ── Stop / Go / Reading overlay badge ──────────────────────────────
             if self._overlay:
-                badge_w = max(110, w // 4)
-                badge_h = 54
-                bx = w - badge_w - 10
+                badge_w = max(80, w // 5)
+                badge_h = 40
+                bx = w - badge_w - 8
                 by = 10
                 if self._overlay == "go":
                     bg_col = QtGui.QColor(39, 174, 96, 230)
@@ -520,13 +520,13 @@ class SoccerFieldWidget(QtWidgets.QWidget):
 
                     if line2:
                         fnt1 = QtGui.QFont()
-                        fnt1.setPixelSize(17)
+                        fnt1.setPixelSize(13)
                         fnt1.setBold(True)
                         p.setFont(fnt1)
                         p.drawText(QtCore.QRectF(bx, by, badge_w, badge_h * 0.54),
                                    QtCore.Qt.AlignmentFlag.AlignCenter, line1)
                         fnt2 = QtGui.QFont()
-                        fnt2.setPixelSize(16)
+                        fnt2.setPixelSize(12)
                         fnt2.setBold(True)
                         p.setFont(fnt2)
                         p.drawText(QtCore.QRectF(bx, by + badge_h * 0.50,
@@ -534,7 +534,7 @@ class SoccerFieldWidget(QtWidgets.QWidget):
                                    QtCore.Qt.AlignmentFlag.AlignCenter, line2)
                     else:
                         fnt1 = QtGui.QFont()
-                        fnt1.setPixelSize(18)
+                        fnt1.setPixelSize(13)
                         fnt1.setBold(True)
                         p.setFont(fnt1)
                         p.drawText(QtCore.QRectF(bx, by, badge_w, badge_h),
@@ -911,9 +911,9 @@ class MazeWidget(QtWidgets.QWidget):
 
             # ── Stop / Go / Reading corner badge (drawn last, on top) ──────────
             if self._overlay and not self._won:
-                badge_w = max(100, w // 4)
-                badge_h = 54
-                bx = w - badge_w - 10
+                badge_w = max(80, w // 5)
+                badge_h = 40
+                bx = w - badge_w - 8
                 by = 10
                 if self._overlay == "go":
                     bg_col = QtGui.QColor(39, 174, 96, 230)
@@ -931,17 +931,17 @@ class MazeWidget(QtWidgets.QWidget):
                 if bg_col:
                     p.setBrush(bg_col)
                     p.setPen(QtCore.Qt.PenStyle.NoPen)
-                    p.drawRoundedRect(bx, by, badge_w, badge_h, 10, 10)
+                    p.drawRoundedRect(bx, by, badge_w, badge_h, 8, 8)
                     p.setPen(QtCore.Qt.GlobalColor.white)
                     if line2:
                         fnt1 = QtGui.QFont()
-                        fnt1.setPixelSize(17)
+                        fnt1.setPixelSize(13)
                         fnt1.setBold(True)
                         p.setFont(fnt1)
                         p.drawText(QtCore.QRectF(bx, by, badge_w, badge_h * 0.54),
                                    QtCore.Qt.AlignmentFlag.AlignCenter, line1)
                         fnt2 = QtGui.QFont()
-                        fnt2.setPixelSize(16)
+                        fnt2.setPixelSize(12)
                         fnt2.setBold(True)
                         p.setFont(fnt2)
                         p.drawText(QtCore.QRectF(bx, by + badge_h * 0.50,
@@ -949,7 +949,7 @@ class MazeWidget(QtWidgets.QWidget):
                                    QtCore.Qt.AlignmentFlag.AlignCenter, line2)
                     else:
                         fnt1 = QtGui.QFont()
-                        fnt1.setPixelSize(18)
+                        fnt1.setPixelSize(13)
                         fnt1.setBold(True)
                         p.setFont(fnt1)
                         p.drawText(QtCore.QRectF(bx, by, badge_w, badge_h),
@@ -962,8 +962,9 @@ class MazeWidget(QtWidgets.QWidget):
 # ─── main tab ────────────────────────────────────────────────────────────────
 
 class TestTab(QtWidgets.QWidget):
-    # emits (gesture: str, confidence: float, threshold: float, actual: str | None)
-    prediction_made = QtCore.pyqtSignal(str, float, float, object)
+    # emits (gesture, confidence, threshold, actual, source)
+    # source is one of: "Single", "RoboSoccer", "Maze"
+    prediction_made = QtCore.pyqtSignal(str, float, float, object, str)
     # emits (model_name: str, classes: list) when a model is loaded
     model_loaded = QtCore.pyqtSignal(str, list)
     # ── gamification signals ──────────────────────────────────────────────────
@@ -1434,6 +1435,7 @@ class TestTab(QtWidgets.QWidget):
             self._pending_conf,
             self._pending_threshold,
             actual,
+            "Single",
         )
 
     def _build_right(self):
@@ -1996,7 +1998,7 @@ class TestTab(QtWidgets.QWidget):
             self.stream_needed.emit(False)  # capture + inference done — stop radar
 
         elif mode == "robosoccer":
-            self.prediction_made.emit(best, conf, threshold, None)
+            self.prediction_made.emit(best, conf, threshold, None, "RoboSoccer")
             if conf >= threshold and best != "idle":
                 self._apply_rs_gesture(best)
                 self.soccer_gesture_applied.emit(best)
@@ -2015,6 +2017,7 @@ class TestTab(QtWidgets.QWidget):
 
         elif mode == "maze":
             maze_threshold = self._maze_conf_threshold.value()
+            self.prediction_made.emit(best, conf, maze_threshold, None, "Maze")
             if conf < maze_threshold or best == "idle":
                 # idle or below threshold — show quietly and apply the same
                 # cooldown so the player sees the full Ready → Reading → Wait cycle

@@ -353,9 +353,9 @@ class ResultsTab(QtWidgets.QWidget):
         self._clear_btn.setEnabled(False)
 
     def add_prediction(self, gesture: str, confidence: float, threshold: float,
-                       actual=None):
+                       actual=None, source: str = "Single"):
         dt = datetime.datetime.now()
-        self._history.append((dt, gesture, confidence, threshold, actual))
+        self._history.append((dt, gesture, confidence, threshold, actual, source))
 
         # Confusion matrix and accuracy bars only update when the student
         # confirmed their actual gesture (Single Prediction mode only).
@@ -382,12 +382,20 @@ class ResultsTab(QtWidgets.QWidget):
         center = QtCore.Qt.AlignmentFlag.AlignCenter
         actual_text = actual.replace("_", " ") if actual else "—"
 
+        source_colors = {
+            "Single":     "#8e44ad",
+            "RoboSoccer": "#27ae60",
+            "Maze":       "#e67e22",
+        }
+        source_color = source_colors.get(source, "#555")
+
         self._table.setItem(row, 0, _item(dt.strftime("%H:%M:%S"), center))
-        self._table.setItem(row, 1,
+        self._table.setItem(row, 1, _item(source, center, source_color, bold=True))
+        self._table.setItem(row, 2,
             _item(gesture.replace("_", " "), color="#1a3a5c", bold=True))
-        self._table.setItem(row, 2, _item(f"{confidence:.1%}", center))
-        self._table.setItem(row, 3, _item(actual_text, center))
-        self._table.setItem(row, 4,
+        self._table.setItem(row, 3, _item(f"{confidence:.1%}", center))
+        self._table.setItem(row, 4, _item(actual_text, center))
+        self._table.setItem(row, 5,
             _item("✓  Confident" if ok else "⚠  Low", center,
                   "#27ae60" if ok else "#e67e22"))
 
@@ -396,7 +404,7 @@ class ResultsTab(QtWidgets.QWidget):
         self._clear_btn.setEnabled(True)
 
         n = len(self._history)
-        above = sum(1 for _, _, c, t, _ in self._history if c >= t)
+        above = sum(1 for _, _, c, t, _, _ in self._history if c >= t)
         self._summary_lbl.setText(
             f"{n} prediction{'s' if n != 1 else ''}  —  "
             f"{above} confident  ({above / n:.0%})"
@@ -516,17 +524,18 @@ class ResultsTab(QtWidgets.QWidget):
 
         layout.addLayout(header)
 
-        self._table = QtWidgets.QTableWidget(0, 5)
+        self._table = QtWidgets.QTableWidget(0, 6)
         self._table.setHorizontalHeaderLabels(
-            ["Time", "Predicted", "Confidence", "Actual", "Result"]
+            ["Time", "Mode", "Predicted", "Confidence", "Actual", "Result"]
         )
         hh = self._table.horizontalHeader()
         hh.setStretchLastSection(False)
         hh.setSectionResizeMode(0, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
-        hh.setSectionResizeMode(1, QtWidgets.QHeaderView.ResizeMode.Stretch)
-        hh.setSectionResizeMode(2, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
+        hh.setSectionResizeMode(1, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
+        hh.setSectionResizeMode(2, QtWidgets.QHeaderView.ResizeMode.Stretch)
         hh.setSectionResizeMode(3, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
         hh.setSectionResizeMode(4, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
+        hh.setSectionResizeMode(5, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
         self._table.setEditTriggers(
             QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
         self._table.setSelectionBehavior(
@@ -558,12 +567,13 @@ class ResultsTab(QtWidgets.QWidget):
             with open(path, "w", newline="") as f:
                 w = csv.writer(f)
                 w.writerow([
-                    "timestamp", "predicted", "confidence",
+                    "timestamp", "mode", "predicted", "confidence",
                     "actual", "above_threshold"
                 ])
-                for dt, gesture, conf, thr, actual in self._history:
+                for dt, gesture, conf, thr, actual, source in self._history:
                     w.writerow([
                         dt.strftime("%Y-%m-%d %H:%M:%S"),
+                        source,
                         gesture,
                         f"{conf:.4f}",
                         actual if actual else "",
