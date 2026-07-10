@@ -57,7 +57,6 @@ python -m pip install ^
     "scipy>=1.10.0" ^
     "transformers>=4.30.0" ^
     "Pillow>=9.0.0" ^
-    "evaluate" ^
     "accelerate" ^
     "websocket-client>=1.9" ^
     --quiet

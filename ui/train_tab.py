@@ -273,7 +273,6 @@ class TrainWorker(QtCore.QObject):
                 AutoImageProcessor, AutoModelForImageClassification,
                 TrainingArguments, Trainer,
             )
-            import evaluate as hf_evaluate
             import json
             from PIL import Image
 
@@ -392,16 +391,26 @@ class TrainWorker(QtCore.QObject):
                 ignore_mismatched_sizes=True,
             )
 
-            # --- Metrics ---
-            acc_metric = hf_evaluate.load("accuracy")
-            f1_metric  = hf_evaluate.load("f1")
+            # --- Metrics (pure numpy — no network, no sklearn) ---
+            # evaluate.load("accuracy"/"f1") downloads the metric script from
+            # the HuggingFace Hub at runtime and the f1 script imports sklearn;
+            # both fail on offline school machines, so we compute them directly.
+            n_classes = len(label_names)
 
             def compute_metrics(eval_pred):
                 logits, labels = eval_pred
-                preds = np.argmax(logits, axis=1)
-                acc = acc_metric.compute(predictions=preds, references=labels)["accuracy"]
-                f1  = f1_metric.compute(predictions=preds, references=labels, average="macro")["f1"]
-                return {"accuracy": acc, "f1_macro": f1}
+                preds  = np.argmax(logits, axis=1)
+                labels = np.asarray(labels)
+                acc = float((preds == labels).mean()) if len(labels) else 0.0
+
+                f1s = []
+                for c in range(n_classes):
+                    tp = int(((preds == c) & (labels == c)).sum())
+                    fp = int(((preds == c) & (labels != c)).sum())
+                    fn = int(((preds != c) & (labels == c)).sum())
+                    denom = 2 * tp + fp + fn
+                    f1s.append(2 * tp / denom if denom > 0 else 0.0)
+                return {"accuracy": acc, "f1_macro": float(np.mean(f1s))}
 
             def collate_fn(batch):
                 import torch
@@ -438,9 +447,8 @@ class TrainWorker(QtCore.QObject):
             fp16 = device == "cuda"
 
             out_path = Path(self._output_dir)
-            training_args = TrainingArguments(
+            ta_kwargs = dict(
                 output_dir=str(out_path / "checkpoints"),
-                eval_strategy="epoch",
                 save_strategy="epoch",
                 learning_rate=self._lr,
                 per_device_train_batch_size=self._batch_size,
@@ -457,6 +465,12 @@ class TrainWorker(QtCore.QObject):
                 fp16=fp16,
                 seed=self._seed,
             )
+            # transformers renamed evaluation_strategy → eval_strategy in 4.41;
+            # support both so older installs on school machines still work.
+            try:
+                training_args = TrainingArguments(eval_strategy="epoch", **ta_kwargs)
+            except TypeError:
+                training_args = TrainingArguments(evaluation_strategy="epoch", **ta_kwargs)
 
             trainer = Trainer(
                 model=model,
