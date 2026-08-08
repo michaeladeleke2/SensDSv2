@@ -1,11 +1,24 @@
 import os
 import glob
+import time
 import datetime
 import numpy as np
 from pathlib import Path
 from PyQt6 import QtWidgets, QtCore, QtGui
 import pyqtgraph as pg
 from ui import app_colors, HintCard, _scrollable_left
+
+
+def _fmt_dur(seconds: float) -> str:
+    """Human-readable duration: '42s', '3m 07s', '1h 12m 30s'."""
+    s = int(round(max(0.0, seconds)))
+    if s < 60:
+        return f"{s}s"
+    m, s = divmod(s, 60)
+    if m < 60:
+        return f"{m}m {s:02d}s"
+    h, m = divmod(m, 60)
+    return f"{h}h {m:02d}m {s:02d}s"
 
 
 def _train_style(c: dict) -> str:
@@ -249,10 +262,19 @@ class TrainWorker(QtCore.QObject):
         self._output_dir = output_dir
         self._model_id = model_id
         self._running = False
+        # Set just before trainer.train(); the epoch callback reads it as the
+        # baseline for the first epoch's duration.
+        self._t_train_start = time.monotonic()
+        # True only while trainer.train() is running.  The final
+        # trainer.evaluate() also fires on_evaluate, and without this guard it
+        # would emit an extra epoch_done and append a phantom point to the
+        # charts (re-evaluating the BEST model, so loss appears to jump back up).
+        self._in_training = False
 
     @QtCore.pyqtSlot()
     def run(self):
         self._running = True
+        t_begin = time.monotonic()
         try:
             # Guard against the CUDA PyTorch DLL issue on Windows devices
             # that don't have an NVIDIA GPU (Surface, school laptops, etc.).
@@ -424,20 +446,36 @@ class TrainWorker(QtCore.QObject):
 
             from transformers import TrainerCallback
 
+            # Mutable holder so the callback can time each epoch without
+            # needing its own __init__ (TrainerCallback is instantiated by us
+            # but re-entered by the Trainer).
+            epoch_clock = {"last": None}
+
             class _UICallback(TrainerCallback):
                 def on_evaluate(self_, args, state, control, metrics=None, **kwargs):
                     if not worker_self._running:
                         control.should_training_stop = True
                         return
+                    # Ignore the final standalone evaluate() — it is not an epoch.
+                    if not worker_self._in_training:
+                        return
                     if metrics and state.epoch is not None:
+                        now = time.monotonic()
+                        prev = epoch_clock["last"] or worker_self._t_train_start
+                        epoch_s = now - prev
+                        epoch_clock["last"] = now
+
                         epoch = int(round(state.epoch))
                         loss = metrics.get("eval_loss", 0.0)
                         acc  = metrics.get("eval_accuracy", 0.0)
                         f1   = metrics.get("eval_f1_macro", 0.0)
-                        worker_self.log.emit(
+                        msg = (
                             f"Epoch {epoch}/{worker_self._epochs} — "
                             f"val_loss: {loss:.4f}  acc: {acc:.2%}  f1: {f1:.3f}"
+                            f"  [{_fmt_dur(epoch_s)}]"
                         )
+                        worker_self.log.emit(msg)
+                        print(f"[SensDS] {msg}", flush=True)
                         worker_self.epoch_done.emit(epoch, loss, acc, f1)
 
                 def on_log(self_, args, state, control, logs=None, **kwargs):
@@ -482,8 +520,26 @@ class TrainWorker(QtCore.QObject):
                 callbacks=[_UICallback()],
             )
 
-            self.log.emit("Training...")
-            trainer.train()
+            setup_s = time.monotonic() - t_begin
+            self.log.emit(f"Setup took {_fmt_dur(setup_s)}. Training...")
+            print(f"[SensDS] Setup took {_fmt_dur(setup_s)}. Training "
+                  f"{self._epochs} epochs on {device}...", flush=True)
+
+            self._t_train_start = time.monotonic()
+            self._in_training = True
+            try:
+                trainer.train()
+            finally:
+                self._in_training = False
+            train_s = time.monotonic() - self._t_train_start
+
+            per_epoch = train_s / max(1, self._epochs)
+            self.log.emit(
+                f"Training finished in {_fmt_dur(train_s)} "
+                f"({_fmt_dur(per_epoch)}/epoch avg)."
+            )
+            print(f"[SensDS] Training finished in {_fmt_dur(train_s)} "
+                  f"({_fmt_dur(per_epoch)}/epoch avg)", flush=True)
 
             self.log.emit("Evaluating best model...")
             metrics = trainer.evaluate()
@@ -502,7 +558,11 @@ class TrainWorker(QtCore.QObject):
             with labels_json.open("w") as f:
                 json.dump({"id2label": id2label, "label2id": label2id}, f, indent=2)
 
+            total_s = time.monotonic() - t_begin
             self.log.emit(f"Model saved to: {final_dir}")
+            self.log.emit(f"Total time (setup + training + save): {_fmt_dur(total_s)}")
+            print(f"[SensDS] Total time: {_fmt_dur(total_s)}  ->  {final_dir}",
+                  flush=True)
             self.finished.emit(str(final_dir))
 
         except Exception as e:
@@ -524,6 +584,12 @@ class TrainTab(QtWidgets.QWidget):
         self._loss_data = []
         self._acc_data = []
         self._f1_data = []
+        # Wall-clock tracking for the on-screen elapsed / ETA readout
+        self._train_start: float | None = None
+        self._epochs_total = 0
+        self._elapsed_timer = QtCore.QTimer(self)
+        self._elapsed_timer.setInterval(1000)
+        self._elapsed_timer.timeout.connect(self._tick_elapsed)
         self._setup_ui()
         self.refresh()
 
@@ -716,7 +782,18 @@ class TrainTab(QtWidgets.QWidget):
         layout.setContentsMargins(20, 20, 20, 20)
         layout.setSpacing(12)
 
-        layout.addWidget(self._lbl_section("Training Progress  (per epoch)"))
+        # Header row: section title on the left, live elapsed/ETA on the right.
+        hdr = QtWidgets.QHBoxLayout()
+        hdr.setContentsMargins(0, 0, 0, 0)
+        hdr.addWidget(self._lbl_section("Training Progress  (per epoch)"))
+        hdr.addStretch()
+        self._timer_lbl = QtWidgets.QLabel("")
+        self._timer_lbl.setStyleSheet(
+            f"font-size: 12px; font-weight: bold; color: {self._c['subtext']};"
+            " font-family: monospace;"
+        )
+        hdr.addWidget(self._timer_lbl)
+        layout.addLayout(hdr)
 
         self._chart_bg   = '#1a1a2e' if self._c['panel'] != '#ffffff' else '#f7f8fc'
         self._axis_pen   = pg.mkPen('w') if self._c['panel'] != '#ffffff' else pg.mkPen('#333')
@@ -971,6 +1048,12 @@ class TrainTab(QtWidgets.QWidget):
         self._log.clear()
         self._log.appendPlainText("Starting training...")
 
+        # Start the on-screen clock
+        self._train_start = time.monotonic()
+        self._epochs_total = self._epochs.value()
+        self._timer_lbl.setText("⏱  0s elapsed   ·   starting…")
+        self._elapsed_timer.start()
+
         self._worker = TrainWorker(
             student_filter=student_filter,
             epochs=self._epochs.value(),
@@ -997,6 +1080,33 @@ class TrainTab(QtWidgets.QWidget):
         if self._worker:
             self._worker.stop()
 
+    # ── elapsed / ETA readout ────────────────────────────────────────────────
+
+    def _tick_elapsed(self):
+        """Update the on-screen timer once a second while training runs."""
+        if self._train_start is None:
+            return
+        elapsed = time.monotonic() - self._train_start
+        done = len(self._acc_data)
+        if done > 0 and self._epochs_total > 0:
+            # ETA from the average epoch time so far.  Only meaningful once at
+            # least one epoch has completed; before that we just show elapsed.
+            per_epoch = elapsed / done
+            remaining = max(0.0, per_epoch * (self._epochs_total - done))
+            self._timer_lbl.setText(
+                f"⏱  {_fmt_dur(elapsed)} elapsed   ·   ~{_fmt_dur(remaining)} left"
+                f"   ·   epoch {done}/{self._epochs_total}"
+            )
+        else:
+            self._timer_lbl.setText(f"⏱  {_fmt_dur(elapsed)} elapsed   ·   starting…")
+
+    def _stop_elapsed(self, final_note: str = ""):
+        self._elapsed_timer.stop()
+        if self._train_start is not None:
+            total = time.monotonic() - self._train_start
+            self._timer_lbl.setText(f"{final_note}{_fmt_dur(total)}")
+        self._train_start = None
+
     def _on_log(self, msg):
         self._log.appendPlainText(msg)
         self._log.verticalScrollBar().setValue(self._log.verticalScrollBar().maximum())
@@ -1018,12 +1128,14 @@ class TrainTab(QtWidgets.QWidget):
 
     def _on_finished(self, model_path):
         self._cleanup_thread()
+        self._stop_elapsed("✓  Trained in ")
         self._log.appendPlainText(f"\n✓ Training complete. Model saved to:\n{model_path}")
         self._train_btn.setVisible(True)
         self._stop_btn.setVisible(False)
 
     def _on_error(self, msg):
         self._cleanup_thread()
+        self._stop_elapsed("✗  Failed after ")
         self._log.appendPlainText(f"\n✗ Error: {msg}")
         self._train_btn.setVisible(True)
         self._stop_btn.setVisible(False)
