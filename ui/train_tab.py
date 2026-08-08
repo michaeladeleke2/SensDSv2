@@ -167,14 +167,53 @@ def model_is_available_offline(model_id: str | None = None) -> bool:
     return _hf_cache_snapshot(mid) is not None
 
 
+# Directories under DATA_ROOT that are never student data.
+EXCLUDE_DIRS = {'models', 'model', 'predict_temp', 'temp', 'test', 'checkpoints'}
+
+
+def is_subject_dir(path: Path) -> bool:
+    """
+    True if `path` looks like a student's sample folder.
+
+    Structural rather than name-based: a subject must contain at least one
+    gesture sub-folder holding PNGs.  A name blocklist alone is whack-a-mole —
+    a saved HF checkpoint dropped in DATA_ROOT (config.json + model.safetensors,
+    no sub-folders) was silently treated as a student, and if the split picked
+    it as the validation subject the val set came out empty and training died
+    with "Train or val dataset is empty".
+    """
+    if not path.is_dir() or path.name.startswith('.'):
+        return False
+    if path.name in EXCLUDE_DIRS:
+        return False
+    try:
+        for child in path.iterdir():
+            if child.is_dir() and next(child.glob('*.png'), None) is not None:
+                return True
+    except OSError:
+        return False
+    return False
+
+
+def discover_subjects(root_dir=None) -> list[str]:
+    """
+    Sorted names of every real subject folder under root_dir.
+
+    Single source of truth shared by scan_dataset() and TrainWorker so the
+    dataset-status panel and the trainer can never disagree about who counts
+    as a student.
+    """
+    root = Path(root_dir or DATA_ROOT)
+    if not root.exists():
+        return []
+    return sorted(d.name for d in root.iterdir() if is_subject_dir(d))
+
+
 def scan_dataset(student_filter=None):
     if not os.path.exists(DATA_ROOT):
         return {}, []
 
-    students = [
-        d for d in os.listdir(DATA_ROOT)
-        if os.path.isdir(os.path.join(DATA_ROOT, d)) and d != "models"
-    ]
+    students = discover_subjects(DATA_ROOT)
 
     class_counts = {}
     for student in students:
@@ -186,17 +225,15 @@ def scan_dataset(student_filter=None):
             if not os.path.isdir(gesture_dir):
                 continue
             pngs = glob.glob(os.path.join(gesture_dir, "*.png"))
-            class_counts[gesture] = class_counts.get(gesture, 0) + len(pngs)
+            if pngs:
+                class_counts[gesture] = class_counts.get(gesture, 0) + len(pngs)
 
     return class_counts, students
 
 
 def _split_subjects(root_dir, val_subjects=1, seed=42):
     """Subject-wise train/val split — mirrors phygo split_subjects()."""
-    root = Path(root_dir)
-    EXCLUDE = {'models', 'predict_temp', 'temp', 'test'}
-    subjects = sorted(d.name for d in root.iterdir()
-                      if d.is_dir() and d.name not in EXCLUDE)
+    subjects = discover_subjects(root_dir)
     if not subjects:
         raise ValueError(f"No subjects found in {root_dir}")
     if len(subjects) < 2:
@@ -318,12 +355,23 @@ class TrainWorker(QtCore.QObject):
             processor = AutoImageProcessor.from_pretrained(model_src)
 
             # --- Subject split ---
+            # discover_subjects() only accepts folders that actually contain
+            # gesture sub-folders with PNGs, so stray directories (e.g. a saved
+            # HF checkpoint) can't be mistaken for a student and produce an
+            # empty validation split.
             root = Path(DATA_ROOT)
-            EXCLUDE = {'models', 'predict_temp', 'temp', 'test'}
-            all_subjects = sorted(d.name for d in root.iterdir()
-                                  if d.is_dir() and d.name not in EXCLUDE)
+            all_subjects = discover_subjects(root)
+            if not all_subjects:
+                raise ValueError(
+                    f"No student folders with samples found in {DATA_ROOT}.\n"
+                    "Expected layout:  <student>/<gesture>/*.png"
+                )
             if self._student_filter:
                 all_subjects = [s for s in all_subjects if s in self._student_filter]
+                if not all_subjects:
+                    raise ValueError(
+                        "None of the selected students have any samples."
+                    )
 
             if len(all_subjects) < 2:
                 train_subj, val_subj = all_subjects, all_subjects
@@ -340,13 +388,24 @@ class TrainWorker(QtCore.QObject):
             self.log.emit(f"Val subjects:   {val_subj}")
 
             # --- Discover classes ---
+            # Only from the subjects actually taking part, and only gesture
+            # folders that hold at least one PNG — an empty folder left behind
+            # by a cancelled collection run would otherwise become a class that
+            # no sample ever belongs to.
             gestures = set()
-            for subj_dir in root.iterdir():
-                if subj_dir.is_dir() and subj_dir.name not in EXCLUDE:
-                    for g in subj_dir.iterdir():
-                        if g.is_dir():
-                            gestures.add(g.name)
+            for subj in all_subjects:
+                subj_dir = root / subj
+                if not subj_dir.is_dir():
+                    continue
+                for g in subj_dir.iterdir():
+                    if g.is_dir() and next(g.glob('*.png'), None) is not None:
+                        gestures.add(g.name)
             label_names = sorted(gestures)
+            if not label_names:
+                raise ValueError(
+                    "No gesture folders with PNG samples found for the "
+                    "selected students."
+                )
             label2id = {n: i for i, n in enumerate(label_names)}
             id2label = {i: n for n, i in label2id.items()}
             self.log.emit(f"Classes ({len(label_names)}): {label_names}")
@@ -401,7 +460,34 @@ class TrainWorker(QtCore.QObject):
             self.log.emit(f"Train samples: {len(train_ds)}  |  Val samples: {len(val_ds)}")
 
             if len(train_ds) == 0 or len(val_ds) == 0:
-                raise ValueError("Train or val dataset is empty. Check folder structure.")
+                which = "Training" if len(train_ds) == 0 else "Validation"
+                subj = train_subj if len(train_ds) == 0 else val_subj
+                counts = ", ".join(
+                    f"{s}: {sum(1 for _ in (root / s).glob('*/*.png'))} samples"
+                    for s in all_subjects
+                )
+                raise ValueError(
+                    f"{which} set is empty.\n\n"
+                    f"{which} subjects: {subj}\n"
+                    f"Samples per student — {counts}\n\n"
+                    f"Each student folder needs gesture sub-folders with PNGs:\n"
+                    f"    {DATA_ROOT}/<student>/<gesture>/*.png\n"
+                    f"If a student has no samples, untick them under "
+                    f"'Select students' or collect data for them first."
+                )
+
+            # A validation subject missing some classes still trains, but the
+            # reported accuracy/F1 only cover the classes they actually have.
+            val_classes = {
+                g.name for s in val_subj for g in (root / s).iterdir()
+                if g.is_dir() and next(g.glob('*.png'), None) is not None
+            } if val_subj else set()
+            missing = sorted(set(label_names) - val_classes)
+            if missing:
+                self.log.emit(
+                    f"⚠  Validation subject(s) {val_subj} have no samples for: "
+                    f"{missing}. Accuracy/F1 only reflect the classes they do have."
+                )
 
             # --- Model ---
             self.log.emit("Loading ViT model...")
