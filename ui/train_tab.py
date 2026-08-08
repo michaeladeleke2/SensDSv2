@@ -716,33 +716,37 @@ class TrainTab(QtWidgets.QWidget):
         layout.setContentsMargins(20, 20, 20, 20)
         layout.setSpacing(12)
 
-        layout.addWidget(self._lbl_section("Training Progress  (val accuracy & F1 per epoch)"))
+        layout.addWidget(self._lbl_section("Training Progress  (per epoch)"))
 
-        chart_bg = '#1a1a2e' if self._c['panel'] != '#ffffff' else '#f7f8fc'
-        axis_pen = pg.mkPen('w') if self._c['panel'] != '#ffffff' else pg.mkPen('#333')
-        axis_color = '#ccc' if self._c['panel'] != '#ffffff' else '#333'
+        self._chart_bg   = '#1a1a2e' if self._c['panel'] != '#ffffff' else '#f7f8fc'
+        self._axis_pen   = pg.mkPen('w') if self._c['panel'] != '#ffffff' else pg.mkPen('#333')
+        self._axis_color = '#ccc' if self._c['panel'] != '#ffffff' else '#333'
 
-        self._chart = pg.PlotWidget()
-        self._chart.setBackground(chart_bg)
-        self._chart.setLabel('left', 'Value', color=axis_color)
-        self._chart.setLabel('bottom', 'Epoch', color=axis_color)
-        for ax in ('left', 'bottom'):
-            self._chart.getAxis(ax).setPen(axis_pen)
-            self._chart.getAxis(ax).setTextPen(axis_pen)
-        self._chart.addLegend()
-        self._chart.setYRange(0, 1.05, padding=0)
-        self._chart.showGrid(x=True, y=True, alpha=0.3)
-        self._loss_curve = self._chart.plot(
-            [], [], name='Val Loss', pen=pg.mkPen('#e74c3c', width=3)
+        # Three separate charts instead of one shared axis.  Accuracy and F1 are
+        # fractions in [0, 1] but validation loss is unbounded and typically
+        # starts near ln(n_classes) ~ 1.1, so on a shared 0-1.05 axis the loss
+        # curve was clipped off the top and effectively invisible.  Separate
+        # axes let loss auto-scale to its own range.
+        charts_row = QtWidgets.QWidget()
+        charts_layout = QtWidgets.QHBoxLayout(charts_row)
+        charts_layout.setContentsMargins(0, 0, 0, 0)
+        charts_layout.setSpacing(10)
+
+        self._acc_chart, self._acc_curve = self._make_metric_chart(
+            "Accuracy", '#2ecc71', y_range=(0, 1.05),
         )
-        self._acc_curve = self._chart.plot(
-            [], [], name='Accuracy', pen=pg.mkPen('#2ecc71', width=3)
+        self._f1_chart, self._f1_curve = self._make_metric_chart(
+            "F1 (macro)", '#f39c12', y_range=(0, 1.05),
         )
-        self._f1_curve = self._chart.plot(
-            [], [], name='F1 (macro)', pen=pg.mkPen('#f39c12', width=3, style=QtCore.Qt.PenStyle.DashLine)
+        # No y_range -> pyqtgraph auto-scales to the observed loss values.
+        self._loss_chart, self._loss_curve = self._make_metric_chart(
+            "Val Loss", '#e74c3c',
         )
-        self._chart.setMinimumHeight(120)
-        layout.addWidget(self._chart, 3)   # takes 3/4 of flexible space
+
+        for chart in (self._acc_chart, self._f1_chart, self._loss_chart):
+            charts_layout.addWidget(chart, 1)
+
+        layout.addWidget(charts_row, 3)   # takes 3/4 of flexible space
 
         layout.addWidget(self._lbl_section("Training Log"))
 
@@ -770,6 +774,41 @@ class TrainTab(QtWidgets.QWidget):
         layout.addLayout(bottom_row)
 
         return panel
+
+    def _make_metric_chart(self, title: str, color: str, y_range=None):
+        """
+        Build one metric chart and return (chart, curve).
+
+        y_range=None leaves auto-scaling on, which is what unbounded metrics
+        like validation loss need.
+        """
+        chart = pg.PlotWidget()
+        chart.setBackground(self._chart_bg)
+        chart.setTitle(title, color=color, size='10pt', bold=True)
+        chart.setLabel('bottom', 'Epoch', color=self._axis_color)
+        for ax in ('left', 'bottom'):
+            chart.getAxis(ax).setPen(self._axis_pen)
+            chart.getAxis(ax).setTextPen(self._axis_pen)
+        chart.showGrid(x=True, y=True, alpha=0.3)
+        if y_range is not None:
+            chart.setYRange(*y_range, padding=0)
+        chart.setMinimumHeight(120)
+        chart.setMinimumWidth(160)
+
+        # Symbols matter here: with a line-only plot the very first epoch
+        # renders as nothing at all (a single point has no segment to draw).
+        curve = chart.plot(
+            [], [],
+            pen=pg.mkPen(color, width=2),
+            symbol='o', symbolSize=6,
+            symbolBrush=color, symbolPen=None,
+        )
+        return chart, curve
+
+    def _set_chart_title(self, chart, base: str, color: str, value: str | None):
+        """Show the latest value in the chart title so small plots stay readable."""
+        text = base if value is None else f"{base}   {value}"
+        chart.setTitle(text, color=color, size='10pt', bold=True)
 
     def _lbl(self, text):
         l = QtWidgets.QLabel(text)
@@ -926,6 +965,9 @@ class TrainTab(QtWidgets.QWidget):
         self._loss_curve.setData([], [])
         self._acc_curve.setData([], [])
         self._f1_curve.setData([], [])
+        self._set_chart_title(self._acc_chart,  "Accuracy",   '#2ecc71', None)
+        self._set_chart_title(self._f1_chart,   "F1 (macro)", '#f39c12', None)
+        self._set_chart_title(self._loss_chart, "Val Loss",   '#e74c3c', None)
         self._log.clear()
         self._log.appendPlainText("Starting training...")
 
@@ -967,6 +1009,12 @@ class TrainTab(QtWidgets.QWidget):
         self._loss_curve.setData(epochs, self._loss_data)
         self._acc_curve.setData(epochs, self._acc_data)
         self._f1_curve.setData(epochs, self._f1_data)
+
+        # Surface the latest value in each title — the three charts are narrow,
+        # so reading exact values off the axes is awkward.
+        self._set_chart_title(self._acc_chart,  "Accuracy",   '#2ecc71', f"{acc:.1%}")
+        self._set_chart_title(self._f1_chart,   "F1 (macro)", '#f39c12', f"{f1:.3f}")
+        self._set_chart_title(self._loss_chart, "Val Loss",   '#e74c3c', f"{loss:.4f}")
 
     def _on_finished(self, model_path):
         self._cleanup_thread()
