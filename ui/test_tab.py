@@ -189,9 +189,7 @@ def _frames_to_pil(frames):
     Requires at least 10 frames; uses the last EPOCH_FRAMES (30) if more given.
     """
     from PIL import Image
-    from core.processing import (
-        EPOCH_FRAMES, spectrogram_from_frames, spectrogram_to_db,
-    )
+    from core.processing import EPOCH_FRAMES, epoch_spectrogram_db
 
     if len(frames) < 10:
         return None
@@ -202,8 +200,8 @@ def _frames_to_pil(frames):
         if stack.ndim == 3:
             stack = stack[:, np.newaxis]
 
-        spect    = spectrogram_from_frames(stack)   # (STFT_NFFT, n_cols) magnitude
-        spect_db = spectrogram_to_db(spect)         # (STFT_NFFT, n_cols) float32 dB
+        # Honours the active spectrogram method (STFT or Doppler-RDM)
+        spect_db = epoch_spectrogram_db(stack)      # (freq_bins, n_cols) float32 dB
 
         # Keep float32 throughout — avoids the 2× memory allocation of a
         # float64 round-trip and is ~30% faster on CPU-only machines.

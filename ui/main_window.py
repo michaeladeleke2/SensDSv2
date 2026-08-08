@@ -6,7 +6,7 @@ import numpy as np
 from PyQt6 import QtWidgets, QtCore, QtGui
 from ui import app_colors
 from ui.gamification import GamificationManager, GamificationBar
-from ui.spectrogram_widget import SpectrogramWidget
+from ui.spectrogram_widget import SpectrogramWidget, VisualizeTab
 from ui.collect_tab import CollectTab
 from ui.train_tab import TrainTab
 from ui.test_tab import TestTab
@@ -234,6 +234,10 @@ class RadarBridge(QtCore.QObject):
     def is_streaming(self) -> bool:
         return self._streaming
 
+    @property
+    def processor(self) -> SpectrogramProcessor:
+        return self._processor
+
     def start_stream(self, with_display: bool = False):
         """
         Open the radar hardware (if not already open) and start capturing.
@@ -243,7 +247,7 @@ class RadarBridge(QtCore.QObject):
         if not self._streaming:
             # Clear any stale frames left over from a previous session so the
             # first inference always sees fresh data.
-            self._processor._buf.clear()
+            self._processor.reset()
             try:
                 self._stream.start()
             except Exception as e:
@@ -440,8 +444,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self._tabs = QtWidgets.QTabWidget()
         self._tabs.tabBar().setExpanding(True)
 
-        self._spectrogram = SpectrogramWidget()
-        self._tabs.addTab(self._spectrogram, "📡   Visualize")
+        self._visualize_tab = VisualizeTab()
+        # Keep a direct handle on the plot widget so the existing
+        # frame_ready -> update_frame wiring stays unchanged.
+        self._spectrogram = self._visualize_tab.spectrogram
+        self._visualize_tab.method_changed.connect(self._on_spect_method_changed)
+        self._tabs.addTab(self._visualize_tab, "📡   Visualize")
 
         self._collect_tab = CollectTab()
         self._tabs.addTab(self._collect_tab, "🎙   Collect")
@@ -531,6 +539,17 @@ class MainWindow(QtWidgets.QMainWindow):
         self._show_soft_lock(
             "Complete the previous steps first — this tab will unlock as you progress."
         )
+
+    def _on_spect_method_changed(self, method: str):
+        """
+        The user picked a different spectrogram representation.
+
+        Drop the accumulated frame buffer and the colour-scale EMA so the new
+        method starts clean instead of inheriting frames that were already
+        rendered under the old one.
+        """
+        if self._bridge is not None:
+            self._bridge.processor.reset()
 
     # Tabs that auto-stream when active: {tab_index: with_display}
     # Visualize (0) needs the display worker; Collect (1) only needs raw frames.

@@ -155,9 +155,7 @@ def _frames_to_pil(frames: list):
     Uses last EPOCH_FRAMES (30) frames matching the 3-second training window.
     """
     from PIL import Image
-    from core.processing import (
-        EPOCH_FRAMES, spectrogram_from_frames, spectrogram_to_db,
-    )
+    from core.processing import EPOCH_FRAMES, epoch_spectrogram_db
     if len(frames) < 10:
         return None
     try:
@@ -166,8 +164,8 @@ def _frames_to_pil(frames: list):
         # Ensure (n_frame, n_ant, n_chirp, n_sample)
         if stack.ndim == 3:
             stack = stack[:, np.newaxis]
-        spect    = spectrogram_from_frames(stack)   # (STFT_NFFT, n_cols) magnitude
-        spect_db = spectrogram_to_db(spect)         # (STFT_NFFT, n_cols) float32 dB
+        # Honours the active spectrogram method (STFT or Doppler-RDM)
+        spect_db = epoch_spectrogram_db(stack)      # (freq_bins, n_cols) float32 dB
         # Keep float32 — avoids the 2× memory + compute cost of a float64 round-trip.
         smoothed   = gaussian_filter(spect_db, sigma=[1.0, 0.5])
         clipped    = np.clip(smoothed, DB_MIN, DB_MAX)

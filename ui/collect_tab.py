@@ -3,7 +3,7 @@ import time
 import numpy as np
 from PyQt6 import QtWidgets, QtCore, QtGui
 from scipy.ndimage import gaussian_filter
-from core.processing import SpectrogramProcessor
+from core.processing import SpectrogramProcessor, method_max_velocity
 from ui import app_colors, HintCard, _scrollable_left
 from ui.spectrogram_widget import (
     DB_MIN, DB_MAX, FREQ_BINS, MAX_VELOCITY, FRAME_TIME_S, make_jet_colormap,
@@ -581,17 +581,20 @@ class CollectTab(QtWidgets.QWidget):
         display = np.clip(smoothed, DB_MIN, DB_MAX).astype(np.float32)
 
         # --- Save PNG ---
-        # spectrogram shape: (FREQ_BINS, n_cols)
-        # We want: width = n_cols (time), height = FREQ_BINS (velocity)
+        # spectrogram shape: (freq_bins, n_cols) — freq_bins depends on the
+        # active method (1024 for STFT, 512 for Doppler-RDM), so read it off
+        # the array rather than assuming the module constant.
+        # We want: width = n_cols (time), height = freq_bins (velocity)
         # Flip vertically so positive velocity is at the top of the image.
+        freq_bins = display.shape[0]
         normalized = (display - DB_MIN) / (DB_MAX - DB_MIN)
-        colored = _apply_jet_colormap(normalized)           # (FREQ_BINS, n_cols, 3)
+        colored = _apply_jet_colormap(normalized)           # (freq_bins, n_cols, 3)
         colored_flipped = np.ascontiguousarray(colored[::-1])  # positive vel → top
         n_cols = colored_flipped.shape[1]
         img_raw = QtGui.QImage(
             colored_flipped.tobytes(),
             n_cols,
-            FREQ_BINS,
+            freq_bins,
             n_cols * 3,
             QtGui.QImage.Format.Format_RGB888,
         )
@@ -611,14 +614,15 @@ class CollectTab(QtWidgets.QWidget):
         duration = n_frames * FRAME_TIME_S
         n_cols_display = display.shape[1]
         time_scale = duration / n_cols_display
-        vel_scale = (2 * MAX_VELOCITY) / FREQ_BINS
+        max_vel = method_max_velocity()
+        vel_scale = (2 * max_vel) / freq_bins
 
         self._preview_img.setTransform(
-            QtGui.QTransform().scale(time_scale, vel_scale).translate(0, -FREQ_BINS / 2)
+            QtGui.QTransform().scale(time_scale, vel_scale).translate(0, -freq_bins / 2)
         )
         self._preview_img.setImage(display.T, autoLevels=False)
         self._preview_plot.setXRange(0, duration, padding=0)
-        self._preview_plot.setYRange(-MAX_VELOCITY, MAX_VELOCITY, padding=0)
+        self._preview_plot.setYRange(-max_vel, max_vel, padding=0)
 
         self._refresh_counts()
         self._open_folder_btn.setEnabled(True)
