@@ -12,90 +12,103 @@ import pyqtgraph as pg
 from PyQt6 import QtCore, QtWidgets
 
 from core import pca_analysis as PA
-from ui import HintCard, _scrollable_left
+from ui import HintCard, _scrollable_left, app_colors, is_dark_mode
 
 MIN_CLASSES = 2
 MIN_SAMPLES = 6
 
 # Fixed palette so a gesture keeps the same colour in both plots.
-CLASS_COLORS = [
+# Two variants: the light one is too dark to read on a dark plot background
+# (notably the navy), the dark one washes out on white.
+CLASS_COLORS_LIGHT = [
     "#e74c3c", "#2980b9", "#27ae60", "#f39c12",
     "#8e44ad", "#16a085", "#d35400", "#2c3e50",
 ]
+CLASS_COLORS_DARK = [
+    "#ff6b6b", "#5dade2", "#2ecc71", "#f5b041",
+    "#bb8fce", "#48c9b0", "#f0932b", "#aab7b8",
+]
 
 
-def _pca_style() -> str:
-    return """
-    QWidget#pca_root { background: #f0f2f5; }
-    QWidget#left_panel {
-        background: #ffffff;
-        border-right: 1px solid #dddddd;
-    }
-    QLabel#heading {
+def class_colors() -> list:
+    return CLASS_COLORS_DARK if is_dark_mode() else CLASS_COLORS_LIGHT
+
+
+def _pca_style(c: dict) -> str:
+    return f"""
+    QWidget#pca_root {{ background: {c['bg']}; }}
+    QWidget#left_panel {{
+        background: {c['panel']};
+        border-right: 1px solid {c['border']};
+    }}
+    QLabel#heading {{
         font-size: 16px;
         font-weight: bold;
-        color: #1a3a5c;
-    }
-    QLabel#field_label {
+        color: {c['accent']};
+    }}
+    QLabel#field_label {{
         font-size: 12px;
         font-weight: bold;
-        color: #555555;
-    }
-    QLabel#status_ok   { font-size: 12px; color: #27ae60; font-weight: bold; }
-    QLabel#status_warn { font-size: 12px; color: #e67e22; font-weight: bold; }
-    QLabel#status_err  { font-size: 12px; color: #c0392b; font-weight: bold; }
-    QLabel#note {
+        color: {c['subtext']};
+    }}
+    QLabel#status_ok   {{ font-size: 12px; color: #27ae60; font-weight: bold; }}
+    QLabel#status_warn {{ font-size: 12px; color: #e67e22; font-weight: bold; }}
+    QLabel#status_err  {{ font-size: 12px; color: #e74c3c; font-weight: bold; }}
+    QLabel#note {{
         font-size: 11px;
-        color: #666666;
-    }
-    QPushButton#pca_btn {
-        background-color: #1a3a5c;
+        color: {c['subtext']};
+    }}
+    QPushButton#pca_btn {{
+        background-color: {c['accent']};
         color: white;
         border: none;
         border-radius: 6px;
         padding: 10px;
         font-size: 13px;
         font-weight: bold;
-    }
-    QPushButton#pca_btn:hover { background-color: #245080; }
-    QPushButton#pca_btn:disabled { background-color: #aaaaaa; }
-    QPushButton#refresh_btn {
-        background: white;
-        border: 1px solid #cccccc;
+    }}
+    QPushButton#pca_btn:hover {{ background-color: #245080; }}
+    QPushButton#pca_btn:disabled {{
+        background-color: {c['progress_bg']};
+        color: {c['faint']};
+    }}
+    QPushButton#refresh_btn {{
+        background: {c['panel']};
+        border: 1px solid {c['input_border']};
         border-radius: 5px;
         padding: 6px 12px;
         font-size: 12px;
-        color: #1a3a5c;
+        color: {c['accent']};
         font-weight: bold;
-    }
-    QPushButton#refresh_btn:hover { background: #f0f0f0; }
-    QProgressBar {
+    }}
+    QPushButton#refresh_btn:hover {{ background: {c['tab_hover']}; }}
+    QProgressBar {{
         border: none;
         border-radius: 4px;
-        background: #e0e0e0;
+        background: {c['progress_bg']};
         max-height: 8px;
         text-align: center;
         color: transparent;
-    }
-    QProgressBar::chunk { background-color: #1a3a5c; border-radius: 4px; }
-    QLabel#caption {
+    }}
+    QProgressBar::chunk {{ background-color: {c['accent']}; border-radius: 4px; }}
+    QLabel#caption {{
         font-size: 12px;
-        color: #555555;
+        color: {c['subtext']};
         font-family: monospace;
-    }
-    QLabel#measures {
+    }}
+    QLabel#measures {{
         font-size: 11px;
-        color: #777777;
-    }
-    QLabel#summary {
+        color: {c['faint']};
+    }}
+    QLabel#summary {{
         font-size: 13px;
         font-weight: bold;
-        color: #1a3a5c;
-        background: #ffffff;
-        border: 1px solid #dddddd;
+        color: {c['accent']};
+        background: {c['panel']};
+        border: 1px solid {c['border']};
         border-radius: 6px;
         padding: 10px;
-    }
+    }}
     """
 
 
@@ -165,8 +178,16 @@ class PcaWorker(QtCore.QObject):
 class PcaTab(QtWidgets.QWidget):
     def __init__(self):
         super().__init__()
+        self._c = app_colors()
         self.setObjectName("pca_root")
-        self.setStyleSheet(_pca_style())
+        self.setStyleSheet(_pca_style(self._c))
+        # pyqtgraph is styled imperatively, not by stylesheet.
+        dark = is_dark_mode()
+        self._plot_bg = "#1a1a2e" if dark else "#ffffff"
+        self._axis_pen = pg.mkPen("#888899" if dark else "#999999")
+        self._axis_color = "#cccccc" if dark else "#555555"
+        self._title_color = "#e6e6e6" if dark else "#1a3a5c"
+        self._point_pen = pg.mkPen(self._plot_bg, width=1)
         self._worker = None
         self._thread = None
         self._paths = []
@@ -213,8 +234,8 @@ class PcaTab(QtWidgets.QWidget):
 
         note = QtWidgets.QLabel(
             "This compares two ways of describing the same capture:\n\n"
-            "• Doppler domain — the spectrogram, i.e. how fast things moved.\n\n"
-            "• Range domain — the range-FFT profile, i.e. how far away "
+            "• Doppler domain: the spectrogram, ex. how fast things moved.\n\n"
+            "• Range domain: the range-FFT profile, ex. how far away "
             "things were.\n\n"
             "Both are reduced to 2D with PCA. The one whose classes form "
             "tighter, more separated clusters is the better representation "
@@ -235,7 +256,7 @@ class PcaTab(QtWidgets.QWidget):
             "survived the squash to 2D. Higher is more faithful.",
             "If neither representation separates well, the model will struggle "
             "too — collect more samples or more distinct gestures.",
-        ]))
+        ], c=self._c))
 
         self._run_btn = QtWidgets.QPushButton("▶  Run Analysis")
         self._run_btn.setObjectName("pca_btn")
@@ -249,14 +270,16 @@ class PcaTab(QtWidgets.QWidget):
 
         self._status_msg = QtWidgets.QLabel("")
         self._status_msg.setWordWrap(True)
-        self._status_msg.setStyleSheet("font-size: 11px; color: #888;")
+        self._status_msg.setStyleSheet(
+            f"font-size: 11px; color: {self._c['faint']};"
+        )
         layout.addWidget(self._status_msg)
 
         return _scrollable_left(panel, width=300)
 
     def _build_right_panel(self):
         panel = QtWidgets.QWidget()
-        panel.setStyleSheet("background: #f0f2f5;")
+        panel.setStyleSheet(f"background: {self._c['bg']};")
         layout = QtWidgets.QVBoxLayout(panel)
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(8)
@@ -308,25 +331,26 @@ class PcaTab(QtWidgets.QWidget):
 
     def _make_plot(self, title, units):
         plot = pg.PlotWidget()
-        plot.setBackground("#ffffff")
-        plot.setTitle(title, color="#1a3a5c", size="11pt", bold=True)
+        plot.setBackground(self._plot_bg)
+        plot.setTitle(title, color=self._title_color, size="11pt", bold=True)
         # Units go in the label text rather than pyqtgraph's units= kwarg,
         # which would add SI prefixes ("kdB") that make no sense here.
-        plot.setLabel("left", f"PC2  ({units})", color="#555555")
-        plot.setLabel("bottom", f"PC1  ({units})", color="#555555")
+        plot.setLabel("left", f"PC2  ({units})", color=self._axis_color)
+        plot.setLabel("bottom", f"PC1  ({units})", color=self._axis_color)
         for ax in ("left", "bottom"):
-            plot.getAxis(ax).setPen(pg.mkPen("#999999"))
-            plot.getAxis(ax).setTextPen(pg.mkPen("#555555"))
+            plot.getAxis(ax).setPen(self._axis_pen)
+            plot.getAxis(ax).setTextPen(pg.mkPen(self._axis_color))
         plot.showGrid(x=True, y=True, alpha=0.25)
         plot.setMinimumHeight(180)
-        legend = plot.addLegend(offset=(-10, 10), labelTextColor="#333333")
+        legend = plot.addLegend(offset=(-10, 10),
+                                labelTextColor=self._axis_color)
         return plot, legend
 
     def _set_axis_variance(self, plot, units, var):
         plot.setLabel("bottom", f"PC1  ({units})  —  {var[0]:.1%} of variance",
-                      color="#555555")
+                      color=self._axis_color)
         plot.setLabel("left", f"PC2  ({units})  —  {var[1]:.1%} of variance",
-                      color="#555555")
+                      color=self._axis_color)
 
     def _caption(self):
         lbl = QtWidgets.QLabel("—")
@@ -347,7 +371,7 @@ class PcaTab(QtWidgets.QWidget):
     def _divider(self):
         line = QtWidgets.QFrame()
         line.setFrameShape(QtWidgets.QFrame.Shape.HLine)
-        line.setStyleSheet("color: #eeeeee; margin: 2px 0;")
+        line.setStyleSheet(f"color: {self._c['divider']}; margin: 2px 0;")
         return line
 
     # ── dataset status ───────────────────────────────────────────────────────
@@ -401,7 +425,7 @@ class PcaTab(QtWidgets.QWidget):
         self._progress.setMaximum(len(self._paths))
         self._progress.setValue(0)
         self._progress.setVisible(True)
-        self._summary.setText("Analysing…")
+        self._summary.setText("Analyzing…")
 
         self._worker = PcaWorker(self._paths, self._labels)
         self._thread = QtCore.QThread()
@@ -422,11 +446,11 @@ class PcaTab(QtWidgets.QWidget):
         self._progress.setVisible(False)
         self._run_btn.setEnabled(True)
         self._refresh_btn.setEnabled(True)
-        self._status_msg.setText(f"Done — {len(labels)} samples analysed.")
+        self._status_msg.setText(f"Done — {len(labels)} samples analyzed.")
 
         classes = sorted(set(labels))
-        colors = {c: CLASS_COLORS[i % len(CLASS_COLORS)]
-                  for i, c in enumerate(classes)}
+        palette = class_colors()
+        colors = {c: palette[i % len(palette)] for i, c in enumerate(classes)}
 
         self._draw(self._spec_plot, self._spec_legend, spec_proj, labels,
                    classes, colors)
@@ -456,7 +480,7 @@ class PcaTab(QtWidgets.QWidget):
             mask = labels == c
             item = pg.ScatterPlotItem(
                 x=proj[mask, 0], y=proj[mask, 1],
-                size=11, pen=pg.mkPen("#ffffff", width=1),
+                size=11, pen=self._point_pen,
                 brush=pg.mkBrush(colors[c]),
             )
             plot.addItem(item)
