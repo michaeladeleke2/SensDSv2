@@ -3,7 +3,7 @@ import time
 import numpy as np
 from PyQt6 import QtWidgets, QtCore, QtGui
 from scipy.ndimage import gaussian_filter
-from core.processing import SpectrogramProcessor, method_max_velocity
+from core.processing import epoch_spectrogram_db, method_max_velocity
 from ui import app_colors, HintCard, _scrollable_left
 from ui.spectrogram_widget import (
     DB_MIN, DB_MAX, FREQ_BINS, MAX_VELOCITY, FRAME_TIME_S, make_jet_colormap,
@@ -138,17 +138,18 @@ def _collect_style(c: dict) -> str:
 class CaptureWorker(QtCore.QObject):
     countdown = QtCore.pyqtSignal(int)
     capturing = QtCore.pyqtSignal()
-    # emits (spectrogram_array, n_frames_used) so the preview can compute
-    # the correct time axis from the actual number of captured frames.
-    sample_done = QtCore.pyqtSignal(np.ndarray, int)
+    # emits (spectrogram_array, n_frames_used, raw_cube) so the preview can
+    # compute the correct time axis and the caller can save the raw frames.
+    sample_done = QtCore.pyqtSignal(np.ndarray, int, np.ndarray)
     batch_done = QtCore.pyqtSignal()
     stopped = QtCore.pyqtSignal()
 
-    def __init__(self, num_samples, duration_s, delay_s):
+    def __init__(self, num_samples, duration_s, delay_s, num_frames):
         super().__init__()
         self._num_samples = num_samples
         self._duration_s = duration_s
         self._delay_s = delay_s
+        self._num_frames = num_frames
         self._running = False
         self._collecting = False
         self._frames = []
@@ -175,19 +176,31 @@ class CaptureWorker(QtCore.QObject):
             self._frames = []
             self._collecting = True
             self.capturing.emit()
-            time.sleep(self._duration_s)
+            # Wait for a fixed frame count so every sample has identical
+            # dimensionality (required by PCA), with a timeout so a stalled
+            # radar can't hang the capture loop.
+            deadline = time.monotonic() + self._duration_s * 3
+            while (len(self._frames) < self._num_frames
+                   and self._running
+                   and time.monotonic() < deadline):
+                time.sleep(0.01)
             self._collecting = False
 
-            if self._frames:
-                # Use ALL captured frames (not a fixed 10) so the spectrogram
-                # covers the full gesture window and has a reasonable aspect ratio.
-                n = len(self._frames)
-                proc = SpectrogramProcessor(buffer_frames=n)
-                result = None
-                for f in self._frames:
-                    result = proc.push_frame(f)
+            if not self._running:
+                self.stopped.emit()
+                return
+
+            if len(self._frames) >= self._num_frames:
+                frames = self._frames[:self._num_frames]
+                n = len(frames)
+                raw_cube = np.array(frames)
+                # Compute directly rather than via SpectrogramProcessor: its
+                # buffer floor is max(buffer_frames, EPOCH_FRAMES)=30, so a
+                # fixed count below 30 would never fill it and would silently
+                # emit nothing. Same computation as its _emit_batch().
+                result = epoch_spectrogram_db(raw_cube)
                 if result is not None:
-                    self.sample_done.emit(result, n)
+                    self.sample_done.emit(result, n, raw_cube)
 
         self.batch_done.emit()
 
@@ -533,10 +546,12 @@ class CollectTab(QtWidgets.QWidget):
         self._status_msg.setText(f"Saving to ~/SensDSv2_data/{name}/{label}/{offset_note}")
         self._status_msg.setStyleSheet("font-size: 11px; color: #888;")
 
+        duration_s = self._duration.value()
         self._worker = CaptureWorker(
             num_samples=self._total_samples,
-            duration_s=self._duration.value(),
-            delay_s=self._delay.value()
+            duration_s=duration_s,
+            delay_s=self._delay.value(),
+            num_frames=max(1, round(duration_s / 0.15)),
         )
         self._thread = QtCore.QThread()
         self._worker.moveToThread(self._thread)
@@ -564,15 +579,21 @@ class CollectTab(QtWidgets.QWidget):
             "color: #c0392b; font-size: 22px; font-weight: bold;"
         )
 
-    def _on_sample_done(self, spectrogram, n_frames):
+    def _on_sample_done(self, spectrogram, n_frames, raw_cube):
         self._samples_collected += 1
         self._progress_bar.setValue(self._samples_collected)
 
-        # --- Save raw numpy array ---
+        # --- Save processed spectrogram ---
         npy_path = os.path.join(
             self._save_dir, f"sample_{self._samples_collected:03d}.npy"
         )
         np.save(npy_path, spectrogram)
+
+        # --- Save raw radar cube ---
+        raw_path = os.path.join(
+            self._save_dir, f"sample_{self._samples_collected:03d}_raw.npy"
+        )
+        np.save(raw_path, raw_cube)
 
         # --- Smooth and clip for display / PNG save ---
         smoothed = gaussian_filter(
@@ -627,11 +648,14 @@ class CollectTab(QtWidgets.QWidget):
         self._refresh_counts()
         self._open_folder_btn.setEnabled(True)
         total_in_folder = sum(
-            1 for f in os.listdir(self._save_dir) if f.endswith(".npy")
+            1 for f in os.listdir(self._save_dir)
+            if f.endswith(".npy") and not f.endswith("_raw.npy")
         )
         gesture_label = self._gesture_combo.currentText().strip()
+        raw_shape = "x".join(str(d) for d in raw_cube.shape)
         self._sample_count.setText(
-            f"#{self._samples_collected} saved  —  {total_in_folder} total for '{gesture_label}'"
+            f"#{self._samples_collected} saved  —  {total_in_folder} total for "
+            f"'{gesture_label}'  —  raw {raw_shape} {raw_cube.dtype}"
         )
         self._status_msg.setText(f"✓ Sample {self._samples_collected} saved.")
         self._status_msg.setStyleSheet(
