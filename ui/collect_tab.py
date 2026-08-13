@@ -582,7 +582,7 @@ class CollectTab(QtWidgets.QWidget):
 
         # --- Save PNG ---
         # spectrogram shape: (freq_bins, n_cols) — freq_bins depends on the
-        # active method (1024 for STFT, 512 for Doppler-RDM), so read it off
+        # active method (1024 for STFT, 512 for Infineon SDK), so read it off
         # the array rather than assuming the module constant.
         # We want: width = n_cols (time), height = freq_bins (velocity)
         # Flip vertically so positive velocity is at the top of the image.

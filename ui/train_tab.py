@@ -885,29 +885,39 @@ class TrainTab(QtWidgets.QWidget):
         self._axis_pen   = pg.mkPen('w') if self._c['panel'] != '#ffffff' else pg.mkPen('#333')
         self._axis_color = '#ccc' if self._c['panel'] != '#ffffff' else '#333'
 
-        # Three separate charts instead of one shared axis.  Accuracy and F1 are
-        # fractions in [0, 1] but validation loss is unbounded and typically
-        # starts near ln(n_classes) ~ 1.1, so on a shared 0-1.05 axis the loss
-        # curve was clipped off the top and effectively invisible.  Separate
-        # axes let loss auto-scale to its own range.
+        # Two charts: accuracy + F1 share one axis (both are fractions in
+        # [0, 1], so they are directly comparable), and validation loss gets its
+        # own.  Loss is unbounded and typically starts near ln(n_classes) ~ 1.1,
+        # so on a shared 0-1.05 axis it was clipped off the top and effectively
+        # invisible; its own auto-scaling axis fixes that.
         charts_row = QtWidgets.QWidget()
         charts_layout = QtWidgets.QHBoxLayout(charts_row)
         charts_layout.setContentsMargins(0, 0, 0, 0)
         charts_layout.setSpacing(10)
 
-        self._acc_chart, self._acc_curve = self._make_metric_chart(
-            "Accuracy", '#2ecc71', y_range=(0, 1.05),
+        self._score_chart = self._make_chart("Accuracy & F1", y_range=(0, 1.05))
+        self._score_chart.addLegend(offset=(-10, 10), labelTextColor=self._axis_color)
+        self._acc_curve = self._score_chart.plot(
+            [], [], name='Accuracy',
+            pen=pg.mkPen('#2ecc71', width=2),
+            symbol='o', symbolSize=6, symbolBrush='#2ecc71', symbolPen=None,
         )
-        self._f1_chart, self._f1_curve = self._make_metric_chart(
-            "F1 (macro)", '#f39c12', y_range=(0, 1.05),
-        )
-        # No y_range -> pyqtgraph auto-scales to the observed loss values.
-        self._loss_chart, self._loss_curve = self._make_metric_chart(
-            "Val Loss", '#e74c3c',
+        self._f1_curve = self._score_chart.plot(
+            [], [], name='F1 (macro)',
+            pen=pg.mkPen('#f39c12', width=2, style=QtCore.Qt.PenStyle.DashLine),
+            symbol='t', symbolSize=6, symbolBrush='#f39c12', symbolPen=None,
         )
 
-        for chart in (self._acc_chart, self._f1_chart, self._loss_chart):
-            charts_layout.addWidget(chart, 1)
+        # No y_range -> pyqtgraph auto-scales to the observed loss values.
+        self._loss_chart = self._make_chart("Val Loss")
+        self._loss_curve = self._loss_chart.plot(
+            [], [],
+            pen=pg.mkPen('#e74c3c', width=2),
+            symbol='o', symbolSize=6, symbolBrush='#e74c3c', symbolPen=None,
+        )
+
+        charts_layout.addWidget(self._score_chart, 3)
+        charts_layout.addWidget(self._loss_chart, 2)
 
         layout.addWidget(charts_row, 3)   # takes 3/4 of flexible space
 
@@ -938,16 +948,20 @@ class TrainTab(QtWidgets.QWidget):
 
         return panel
 
-    def _make_metric_chart(self, title: str, color: str, y_range=None):
+    def _make_chart(self, title: str, y_range=None):
         """
-        Build one metric chart and return (chart, curve).
+        Build an empty metric chart.  Callers add their own curves.
 
         y_range=None leaves auto-scaling on, which is what unbounded metrics
         like validation loss need.
+
+        Curves are drawn with symbols on purpose: a line-only plot renders
+        nothing at all after the first epoch, since a single point has no
+        segment to draw.
         """
         chart = pg.PlotWidget()
         chart.setBackground(self._chart_bg)
-        chart.setTitle(title, color=color, size='10pt', bold=True)
+        chart.setTitle(title, color=self._axis_color, size='10pt', bold=True)
         chart.setLabel('bottom', 'Epoch', color=self._axis_color)
         for ax in ('left', 'bottom'):
             chart.getAxis(ax).setPen(self._axis_pen)
@@ -956,22 +970,11 @@ class TrainTab(QtWidgets.QWidget):
         if y_range is not None:
             chart.setYRange(*y_range, padding=0)
         chart.setMinimumHeight(120)
-        chart.setMinimumWidth(160)
+        chart.setMinimumWidth(180)
+        return chart
 
-        # Symbols matter here: with a line-only plot the very first epoch
-        # renders as nothing at all (a single point has no segment to draw).
-        curve = chart.plot(
-            [], [],
-            pen=pg.mkPen(color, width=2),
-            symbol='o', symbolSize=6,
-            symbolBrush=color, symbolPen=None,
-        )
-        return chart, curve
-
-    def _set_chart_title(self, chart, base: str, color: str, value: str | None):
-        """Show the latest value in the chart title so small plots stay readable."""
-        text = base if value is None else f"{base}   {value}"
-        chart.setTitle(text, color=color, size='10pt', bold=True)
+    def _set_chart_title(self, chart, text: str):
+        chart.setTitle(text, color=self._axis_color, size='10pt', bold=True)
 
     def _lbl(self, text):
         l = QtWidgets.QLabel(text)
@@ -1128,9 +1131,8 @@ class TrainTab(QtWidgets.QWidget):
         self._loss_curve.setData([], [])
         self._acc_curve.setData([], [])
         self._f1_curve.setData([], [])
-        self._set_chart_title(self._acc_chart,  "Accuracy",   '#2ecc71', None)
-        self._set_chart_title(self._f1_chart,   "F1 (macro)", '#f39c12', None)
-        self._set_chart_title(self._loss_chart, "Val Loss",   '#e74c3c', None)
+        self._set_chart_title(self._score_chart, "Accuracy & F1")
+        self._set_chart_title(self._loss_chart, "Val Loss")
         self._log.clear()
         self._log.appendPlainText("Starting training...")
 
@@ -1206,11 +1208,12 @@ class TrainTab(QtWidgets.QWidget):
         self._acc_curve.setData(epochs, self._acc_data)
         self._f1_curve.setData(epochs, self._f1_data)
 
-        # Surface the latest value in each title — the three charts are narrow,
-        # so reading exact values off the axes is awkward.
-        self._set_chart_title(self._acc_chart,  "Accuracy",   '#2ecc71', f"{acc:.1%}")
-        self._set_chart_title(self._f1_chart,   "F1 (macro)", '#f39c12', f"{f1:.3f}")
-        self._set_chart_title(self._loss_chart, "Val Loss",   '#e74c3c', f"{loss:.4f}")
+        # Surface the latest values in the titles so exact numbers don't have
+        # to be read off the axes.
+        self._set_chart_title(
+            self._score_chart, f"Accuracy & F1   —   {acc:.1%}  /  {f1:.3f}"
+        )
+        self._set_chart_title(self._loss_chart, f"Val Loss   —   {loss:.4f}")
 
     def _on_finished(self, model_path):
         self._cleanup_thread()

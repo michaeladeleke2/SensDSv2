@@ -305,14 +305,20 @@ class SpectrogramProcessor:
             return None
         stack = np.stack(buf_list, axis=0)
 
-        if _METHOD == METHOD_DOPPLER:
-            raw   = doppler_spectrogram_from_frames(stack)
-            peak  = float(np.nanmax(raw))
-            # Rise instantly to a new peak, decay slowly back down.
+        if _METHOD == METHOD_INFINEON:
+            raw  = doppler_spectrogram_from_frames(stack)
+            peak = float(np.nanmax(raw))
+            # HELD peak, not a fast average.  The live view only ever sees a
+            # few frames, so during a quiet moment the peak IS the noise floor.
+            # A peak-relative colour scale would then stretch that noise across
+            # the whole colormap and the background would light up cyan/green
+            # whenever nobody is gesturing.  Rising instantly but decaying only
+            # ~1 dB/s keeps the scale anchored to the last real gesture, so
+            # quiet periods stay dark.
             if self._vmax_ema is None or peak > self._vmax_ema:
                 self._vmax_ema = peak
             else:
-                self._vmax_ema = 0.9 * self._vmax_ema + 0.1 * peak
+                self._vmax_ema = max(peak, self._vmax_ema - RDM_VMAX_DECAY_DB)
             spect_db = doppler_to_display_db(raw, vmax=self._vmax_ema)
         else:
             spect_db = spectrogram_to_db(spectrogram_from_frames(stack, mti=mti))
@@ -330,7 +336,7 @@ class SpectrogramProcessor:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Doppler-RDM spectrogram — exact port of doppler_spectrogram.py (Infineon style)
+# Infineon SDK spectrogram — exact port of doppler_spectrogram.py (Infineon style)
 # ══════════════════════════════════════════════════════════════════════════════
 #
 # A completely different representation from the STFT method above:
@@ -341,7 +347,7 @@ class SpectrogramProcessor:
 #                  → 1024 Doppler bins × ~63 time columns for a 3 s epoch
 #                  → dB normalised to the image peak, clipped at -20
 #
-#   Doppler-RDM    builds a full Range-Doppler Map per frame (range FFT over
+#   Infineon SDK   builds a full Range-Doppler Map per frame (range FFT over
 #                  fast time, then Doppler FFT over slow time), picks the
 #                  single MOST ENERGETIC range bin per frame (median-smoothed
 #                  across frames so it can't jitter), and emits that one
@@ -487,33 +493,70 @@ def doppler_spectrogram_from_frames(frames: np.ndarray,
     return spectrogram.T.astype(np.float64)                     # script's plot_data
 
 
+# ── Noise floor / dynamic range ───────────────────────────────────────────────
+# The script's colour limits are
+#     vmax = np.nanmax(plot_data)
+#     vmin = jet_vmin if jet_vmin < vmax else vmax - 40.0
+#
+# jet_vmin is an ABSOLUTE dB level (-20).  That only produces a clean image if
+# the recording's absolute dB scale matches the one the script was tuned on.
+# The SensDS radar path lands on a different absolute scale, so a fixed -20
+# leaves the whole noise floor sitting mid-colormap: the background renders
+# cyan/green instead of dark blue, which is exactly the "too much background
+# noise" symptom.
+#
+# We therefore drive the SECOND branch of the same expression — vmax - N — which
+# is peak-relative and so independent of absolute scale.  N defaults to 40.0,
+# the script's own constant, and is tunable from the Visualize tab because the
+# right value depends on the room, the radar gain and how far away the hand is.
+# Lower N  -> tighter range -> darker background, only the strongest return
+# Higher N -> wider range   -> more of the noise floor becomes visible
+RDM_DYNAMIC_RANGE_DB = 40.0
+
+# dB the live view's held peak is allowed to fall per update.  The display
+# worker runs at 5 Hz, so 0.2 dB/update ~= 1 dB/s: fast enough to follow a
+# changing scene, slow enough that the colour scale does not collapse onto the
+# noise floor between gestures.
+RDM_VMAX_DECAY_DB = 0.2
+
+_dynamic_range_db = RDM_DYNAMIC_RANGE_DB
+
+
+def set_dynamic_range_db(db: float):
+    """Set how many dB below the peak are shown before clipping to black."""
+    global _dynamic_range_db
+    _dynamic_range_db = max(5.0, float(db))
+
+
+def get_dynamic_range_db() -> float:
+    return _dynamic_range_db
+
+
 def doppler_to_display_db(spec_db: np.ndarray,
-                          jet_vmin: float = RDM_JET_VMIN,
+                          dynamic_range_db: float | None = None,
                           vmax: float | None = None) -> np.ndarray:
     """
     Map absolute-dB Doppler output into the app's [DB_MIN, DB_MAX] display range.
 
-    The script colour-maps with
-        vmax = np.nanmax(plot_data)
-        vmin = jet_vmin if jet_vmin < vmax else vmax - 40.0
-    and a jet colormap.  Everything downstream in SensDS (the ImageItem levels,
-    the PNG normalisation) is built around a fixed [-20, 0] scale, so we apply
-    the script's vmin/vmax and then affinely rescale into [-20, 0].
-
-    Because both are linear maps into the same jet colormap, the rendered
-    colours are IDENTICAL to the script's — only the numeric labels differ.
+    Everything downstream in SensDS (the ImageItem levels, the PNG
+    normalisation) is built around a fixed [-20, 0] scale, so we apply the
+    script's vmin/vmax and then affinely rescale into [-20, 0].  Both are
+    straight-line maps into the same jet colormap, so the rendered COLOURS are
+    identical to the script's — only the numeric labels differ.
 
     Args:
-        vmax: override the data-derived peak.  Used by the live scrolling view,
-              which smooths vmax over time (see SpectrogramProcessor) so the
-              colour scale doesn't flicker as blocks come and go.
+        dynamic_range_db: dB below the peak to display.  None uses the
+                          app-wide setting (see set_dynamic_range_db).
+        vmax:             override the data-derived peak.  Used by the live
+                          scrolling view, which smooths vmax over time (see
+                          SpectrogramProcessor) so the colour scale doesn't
+                          flicker as blocks come and go.
     """
     if vmax is None:
         vmax = float(np.nanmax(spec_db))
-    vmin = jet_vmin if jet_vmin < vmax else vmax - 40.0
-    if vmax <= vmin:
-        vmax = vmin + 1e-6
-    norm = np.clip((spec_db - vmin) / (vmax - vmin), 0.0, 1.0)
+    rng = _dynamic_range_db if dynamic_range_db is None else max(5.0, dynamic_range_db)
+    vmin = vmax - rng
+    norm = np.clip((spec_db - vmin) / rng, 0.0, 1.0)
     return (DB_MIN + norm * (DB_MAX - DB_MIN)).astype(np.float32)
 
 
@@ -521,8 +564,11 @@ def doppler_to_display_db(spec_db: np.ndarray,
 # Method selection — lets the whole app switch representation at runtime
 # ══════════════════════════════════════════════════════════════════════════════
 
-METHOD_STFT    = "stft"       # original processing_utils.spectrogram() port
-METHOD_DOPPLER = "doppler"    # doppler_spectrogram.py port (Infineon RDM style)
+METHOD_STFT     = "stft"       # original processing_utils.spectrogram() port
+METHOD_INFINEON = "infineon"   # doppler_spectrogram.py port (Infineon SDK style)
+
+# Backwards-compatible alias for the earlier internal name.
+METHOD_DOPPLER = METHOD_INFINEON
 
 _METHOD = METHOD_STFT
 
@@ -530,7 +576,7 @@ _METHOD = METHOD_STFT
 def set_method(method: str):
     """Select the spectrogram representation used app-wide."""
     global _METHOD
-    if method not in (METHOD_STFT, METHOD_DOPPLER):
+    if method not in (METHOD_STFT, METHOD_INFINEON):
         raise ValueError(f"unknown spectrogram method: {method!r}")
     _METHOD = method
 
@@ -541,17 +587,17 @@ def get_method() -> str:
 
 def method_freq_bins(method: str | None = None) -> int:
     """Number of Doppler/frequency bins produced by a method."""
-    return RDM_DOPPLER_BINS if (method or _METHOD) == METHOD_DOPPLER else STFT_NFFT
+    return RDM_DOPPLER_BINS if (method or _METHOD) == METHOD_INFINEON else STFT_NFFT
 
 
 def method_cols_per_frame(method: str | None = None) -> int:
     """New spectrogram columns produced per incoming radar frame."""
-    return RDM_COLS_PER_FRAME if (method or _METHOD) == METHOD_DOPPLER else COLS_PER_FRAME
+    return RDM_COLS_PER_FRAME if (method or _METHOD) == METHOD_INFINEON else COLS_PER_FRAME
 
 
 def method_max_velocity(method: str | None = None) -> float:
     """Velocity half-range (m/s) spanned by the frequency axis."""
-    return RDM_MAX_SPEED_M_S if (method or _METHOD) == METHOD_DOPPLER else MAX_VELOCITY
+    return RDM_MAX_SPEED_M_S if (method or _METHOD) == METHOD_INFINEON else MAX_VELOCITY
 
 
 def epoch_spectrogram_db(frames: np.ndarray,
@@ -569,7 +615,7 @@ def epoch_spectrogram_db(frames: np.ndarray,
         (freq_bins, n_cols) float32 dB in [DB_MIN, DB_MAX]
     """
     m = method or _METHOD
-    if m == METHOD_DOPPLER:
+    if m == METHOD_INFINEON:
         return doppler_to_display_db(doppler_spectrogram_from_frames(frames))
     return spectrogram_to_db(spectrogram_from_frames(frames))
 

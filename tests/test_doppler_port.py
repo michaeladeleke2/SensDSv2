@@ -206,6 +206,90 @@ def test_output_shape_for_real_config():
     assert out.shape == (512, 3), out.shape
 
 
+
+
+# ── display / noise-floor behaviour ──────────────────────────────────────────
+
+def _idle_frames(n_frame=8, seed=0):
+    """Static clutter + noise, no moving target."""
+    import numpy as _np
+    rng = _np.random.default_rng(seed)
+    t = _np.arange(256)
+    out = _np.zeros((n_frame, 3, 128, 256))
+    for f in range(n_frame):
+        for a in range(3):
+            out[f, a] = (0.7 * _np.sin(2 * _np.pi * 2.0 * t / 256)
+                         + 0.05 * rng.standard_normal((128, 256)))
+    return out
+
+
+def _gesture_frames(n_frame=8, seed=1):
+    """Moving target on top of the same clutter + noise."""
+    import numpy as _np
+    rng = _np.random.default_rng(seed)
+    t = _np.arange(256)
+    ci = _np.arange(128)[:, None]
+    out = _np.zeros((n_frame, 3, 128, 256))
+    for f in range(n_frame):
+        for a in range(3):
+            out[f, a] = (_np.sin(2 * _np.pi * 11 * t / 256 + 2 * _np.pi * 0.04 * ci)
+                         + 0.7 * _np.sin(2 * _np.pi * 2.0 * t / 256)
+                         + 0.05 * rng.standard_normal((128, 256)))
+    return out
+
+
+def test_idle_stays_dark_after_gesture():
+    """
+    Regression: the live view lit up with noise whenever nobody gestured.
+
+    With a few frames and no target, the peak IS the noise floor, so a
+    peak-relative colour scale stretched noise across the whole colormap.
+    The held peak must keep quiet periods dark.
+    """
+    import core.processing as P
+    prev = P.get_method()
+    P.set_method(P.METHOD_INFINEON)
+    try:
+        proc = P.SpectrogramProcessor(streaming=True)
+        for f in _gesture_frames(12):
+            proc.push_frame_raw(f)
+        proc.get_streaming_result(n_cols=4, n_frames=8)
+
+        idle = _idle_frames(60)
+        worst = 1.0
+        for i, f in enumerate(idle):
+            proc.push_frame_raw(f)
+            r = proc.get_streaming_result(n_cols=4, n_frames=8)
+            if r is not None and i > 10:          # let the buffer flush
+                worst = min(worst, float((r <= P.DB_MIN + 2).mean()))
+        assert worst > 0.95, f"idle view only {worst:.0%} dark — noise is showing"
+    finally:
+        P.set_method(prev)
+
+
+def test_dynamic_range_setting_changes_contrast():
+    """A tighter dynamic range must darken more of the image."""
+    import core.processing as P
+    raw = doppler_spectrogram_from_frames(_gesture_frames())
+    tight = P.doppler_to_display_db(raw, dynamic_range_db=15)
+    wide = P.doppler_to_display_db(raw, dynamic_range_db=55)
+    dark_tight = float((tight <= P.DB_MIN + 2).mean())
+    dark_wide = float((wide <= P.DB_MIN + 2).mean())
+    assert dark_tight > dark_wide, (dark_tight, dark_wide)
+
+
+def test_dynamic_range_setter_roundtrip():
+    import core.processing as P
+    prev = P.get_dynamic_range_db()
+    try:
+        P.set_dynamic_range_db(25)
+        assert P.get_dynamic_range_db() == 25.0
+        P.set_dynamic_range_db(1)          # clamped to a sane minimum
+        assert P.get_dynamic_range_db() >= 5.0
+    finally:
+        P.set_dynamic_range_db(prev)
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):

@@ -9,7 +9,8 @@ from core.processing import (
     STFT_NFFT, COLS_PER_FRAME, DB_MIN, DB_MAX,
     MAX_VELOCITY, FRAME_TIME_S,
     get_method, set_method, method_freq_bins, method_cols_per_frame,
-    method_max_velocity, METHOD_STFT, METHOD_DOPPLER,
+    method_max_velocity, METHOD_STFT, METHOD_INFINEON,
+    get_dynamic_range_db, set_dynamic_range_db,
 )
 
 DISPLAY_SECONDS = 5   # seconds of rolling history to show
@@ -19,7 +20,7 @@ DISPLAY_SECONDS = 5   # seconds of rolling history to show
 # COLS_PER_FRAME (= 2) new STFT columns arrive every frame (0.1 s = 10 fps)
 # STFT_NFFT = 1024, STFT_SHIFT = 56, so COLS_PER_FRAME = 128 // 56 = 2
 #
-# The Doppler-RDM method has different dimensions (512 bins, 1 column/frame),
+# The Infineon SDK method has different dimensions (512 bins, 1 column/frame),
 # so the widget rebuilds its buffer and axes via set_method() when it changes.
 FREQ_BINS        = STFT_NFFT                              # 1024 Doppler bins
 COLS_PER_SECOND  = int(round(COLS_PER_FRAME / FRAME_TIME_S))  # 2/0.1 = 20 cols/s
@@ -56,8 +57,8 @@ class VisualizeTab(QtWidgets.QWidget):
          "upper-half range window, then slides a 256-sample Hanning STFT.\n"
          "1024 Doppler bins x ~2 columns per frame. MTI clutter filter.\n"
          "This is what all existing trained models were built on."),
-        (METHOD_DOPPLER,
-         "Doppler-RDM (Infineon)",
+        (METHOD_INFINEON,
+         "Infineon SDK",
          "Builds a full Range-Doppler Map per frame, tracks the most energetic "
          "range bin (median-smoothed), and emits that Doppler slice.\n"
          "512 Doppler bins x 1 column per frame. No MTI — range tracking "
@@ -77,6 +78,7 @@ class VisualizeTab(QtWidgets.QWidget):
 
         self.spectrogram = SpectrogramWidget()
         layout.addWidget(self.spectrogram, 1)
+        self._sync_noise_visibility()
 
     def _build_controls(self):
         bar = QtWidgets.QFrame()
@@ -95,7 +97,7 @@ class VisualizeTab(QtWidgets.QWidget):
         row.addWidget(lbl)
 
         self._combo = QtWidgets.QComboBox()
-        self._combo.setFixedWidth(210)
+        self._combo.setFixedWidth(170)
         self._combo.setStyleSheet("""
             QComboBox {
                 background: #1e1e2e; color: #e6e6e6;
@@ -117,17 +119,76 @@ class VisualizeTab(QtWidgets.QWidget):
         self._combo.currentIndexChanged.connect(self._on_changed)
         row.addWidget(self._combo)
 
+        # ── Noise-floor control (Infineon SDK method only) ────────────────────
+        # Drives vmin = vmax - N in doppler_to_display_db().  Lower N clips more
+        # of the noise floor to black; the right value depends on the room and
+        # the radar gain, so it has to be tunable against live data.
+        self._noise_lbl = QtWidgets.QLabel("Noise floor")
+        self._noise_lbl.setStyleSheet(
+            "color: #9aa4b2; font-size: 12px; font-weight: bold; border: none;"
+        )
+        row.addWidget(self._noise_lbl)
+
+        self._noise_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        self._noise_slider.setRange(10, 60)
+        self._noise_slider.setValue(int(round(get_dynamic_range_db())))
+        self._noise_slider.setFixedWidth(140)
+        self._noise_slider.setToolTip(
+            "Dynamic range shown, in dB below the strongest return.\n"
+            "This is the vmin term from the reference script: vmin = vmax - N.\n\n"
+            "Lower  -> darker background, only the strongest motion survives\n"
+            "Higher -> more of the noise floor becomes visible\n\n"
+            "Tune this live with the radar connected and no gesture happening:\n"
+            "reduce it until the background goes uniformly dark blue."
+        )
+        self._noise_slider.setStyleSheet("""
+            QSlider::groove:horizontal {
+                height: 4px; background: #3a3a4a; border-radius: 2px;
+            }
+            QSlider::handle:horizontal {
+                width: 12px; margin: -5px 0; border-radius: 6px;
+                background: #5dade2;
+            }
+            QSlider::sub-page:horizontal {
+                background: #2980b9; border-radius: 2px;
+            }
+        """)
+        self._noise_slider.valueChanged.connect(self._on_noise_changed)
+        row.addWidget(self._noise_slider)
+
+        self._noise_val = QtWidgets.QLabel()
+        self._noise_val.setFixedWidth(52)
+        self._noise_val.setStyleSheet(
+            "color: #5dade2; font-size: 12px; font-weight: bold;"
+            " font-family: monospace; border: none;"
+        )
+        row.addWidget(self._noise_val)
+
         self._desc = QtWidgets.QLabel()
         self._desc.setStyleSheet("color: #6b7280; font-size: 11px; border: none;")
         row.addWidget(self._desc, 1)
 
         row.addStretch()
+        self._update_noise_label()
         self._update_desc()
         return bar
 
+    def _update_noise_label(self):
+        self._noise_val.setText(f"-{self._noise_slider.value()} dB")
+
+    def _on_noise_changed(self, value: int):
+        set_dynamic_range_db(float(value))
+        self._update_noise_label()
+
+    def _sync_noise_visibility(self):
+        """The noise-floor control only affects the Infineon SDK method."""
+        show = self._combo.currentData() == METHOD_INFINEON
+        for w in (self._noise_lbl, self._noise_slider, self._noise_val):
+            w.setVisible(show)
+
     def _update_desc(self):
         key = self._combo.currentData()
-        if key == METHOD_DOPPLER:
+        if key == METHOD_INFINEON:
             self._desc.setText(
                 "512 bins x 1 col/frame  ·  range-tracked  ·  retrain models"
             )
@@ -141,6 +202,7 @@ class VisualizeTab(QtWidgets.QWidget):
         set_method(key)
         self.spectrogram.set_method(key)
         self._update_desc()
+        self._sync_noise_visibility()
         self.method_changed.emit(key)
 
     # Convenience passthrough so main_window can keep calling update_frame
@@ -172,7 +234,7 @@ class SpectrogramWidget(pg.GraphicsLayoutWidget):
         """
         Switch representation live.  Rebuilds the rolling buffer and rescales
         the axes, since the two methods differ in both bin count and columns
-        per frame (1024 x 2/frame for STFT vs 512 x 1/frame for Doppler-RDM).
+        per frame (1024 x 2/frame for STFT vs 512 x 1/frame for Infineon SDK).
         """
         if method == self._method:
             return

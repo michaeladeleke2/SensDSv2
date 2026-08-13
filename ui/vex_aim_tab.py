@@ -164,7 +164,7 @@ def _frames_to_pil(frames: list):
         # Ensure (n_frame, n_ant, n_chirp, n_sample)
         if stack.ndim == 3:
             stack = stack[:, np.newaxis]
-        # Honours the active spectrogram method (STFT or Doppler-RDM)
+        # Honours the active spectrogram method (STFT or Infineon SDK)
         spect_db = epoch_spectrogram_db(stack)      # (freq_bins, n_cols) float32 dB
         # Keep float32 — avoids the 2× memory + compute cost of a float64 round-trip.
         smoothed   = gaussian_filter(spect_db, sigma=[1.0, 0.5])
