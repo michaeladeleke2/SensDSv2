@@ -83,6 +83,10 @@ def _pca_style() -> str:
         color: #555555;
         font-family: monospace;
     }
+    QLabel#measures {
+        font-size: 11px;
+        color: #777777;
+    }
     QLabel#summary {
         font-size: 13px;
         font-weight: bold;
@@ -257,15 +261,30 @@ class PcaTab(QtWidgets.QWidget):
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(8)
 
+        # PCA scores are linear combinations of the input features, so they
+        # carry the input's units. The spectrogram is uniformly dB; the range
+        # feature concatenates magnitude with phase, so its units are mixed.
+        self._spec_units = "dB"
+        self._rfft_units = "mixed: amplitude + rad"
+
+        layout.addWidget(self._measures(
+            "Measuring:  Doppler spectrogram amplitude  ·  32x32 resized  ·  "
+            "1024 features  ·  units dB"
+        ))
         self._spec_plot, self._spec_legend = self._make_plot(
-            "Spectrogram (Doppler domain)"
+            "Spectrogram (Doppler domain)", self._spec_units
         )
         self._spec_caption = self._caption()
         layout.addWidget(self._spec_plot, 1)
         layout.addWidget(self._spec_caption)
 
+        layout.addWidget(self._measures(
+            "Measuring:  range-profile magnitude + phase  ·  32x32 each  ·  "
+            "2048 features  ·  units linear amplitude and radians "
+            "(phase dominates the variance)"
+        ))
         self._rfft_plot, self._rfft_legend = self._make_plot(
-            "Range FFT (range domain)"
+            "Range FFT (range domain)", self._rfft_units
         )
         self._rfft_caption = self._caption()
         layout.addWidget(self._rfft_plot, 1)
@@ -287,12 +306,14 @@ class PcaTab(QtWidgets.QWidget):
 
         return panel
 
-    def _make_plot(self, title):
+    def _make_plot(self, title, units):
         plot = pg.PlotWidget()
         plot.setBackground("#ffffff")
         plot.setTitle(title, color="#1a3a5c", size="11pt", bold=True)
-        plot.setLabel("left", "PC2", color="#555555")
-        plot.setLabel("bottom", "PC1", color="#555555")
+        # Units go in the label text rather than pyqtgraph's units= kwarg,
+        # which would add SI prefixes ("kdB") that make no sense here.
+        plot.setLabel("left", f"PC2  ({units})", color="#555555")
+        plot.setLabel("bottom", f"PC1  ({units})", color="#555555")
         for ax in ("left", "bottom"):
             plot.getAxis(ax).setPen(pg.mkPen("#999999"))
             plot.getAxis(ax).setTextPen(pg.mkPen("#555555"))
@@ -301,9 +322,21 @@ class PcaTab(QtWidgets.QWidget):
         legend = plot.addLegend(offset=(-10, 10), labelTextColor="#333333")
         return plot, legend
 
+    def _set_axis_variance(self, plot, units, var):
+        plot.setLabel("bottom", f"PC1  ({units})  —  {var[0]:.1%} of variance",
+                      color="#555555")
+        plot.setLabel("left", f"PC2  ({units})  —  {var[1]:.1%} of variance",
+                      color="#555555")
+
     def _caption(self):
         lbl = QtWidgets.QLabel("—")
         lbl.setObjectName("caption")
+        return lbl
+
+    def _measures(self, text):
+        lbl = QtWidgets.QLabel(text)
+        lbl.setObjectName("measures")
+        lbl.setWordWrap(True)
         return lbl
 
     def _lbl(self, text):
@@ -400,13 +433,18 @@ class PcaTab(QtWidgets.QWidget):
         self._draw(self._rfft_plot, self._rfft_legend, rfft_proj, labels,
                    classes, colors)
 
+        self._set_axis_variance(self._spec_plot, self._spec_units, spec_var)
+        self._set_axis_variance(self._rfft_plot, self._rfft_units, rfft_var)
+
         self._spec_caption.setText(
             f"PC1 {spec_var[0]:.1%}   PC2 {spec_var[1]:.1%}   "
-            f"silhouette {spec_sil:+.3f}"
+            f"({spec_var[0] + spec_var[1]:.1%} of detail kept)   "
+            f"silhouette {spec_sil:+.3f}  (-1 to +1, higher = better separated)"
         )
         self._rfft_caption.setText(
             f"PC1 {rfft_var[0]:.1%}   PC2 {rfft_var[1]:.1%}   "
-            f"silhouette {rfft_sil:+.3f}"
+            f"({rfft_var[0] + rfft_var[1]:.1%} of detail kept)   "
+            f"silhouette {rfft_sil:+.3f}  (-1 to +1, higher = better separated)"
         )
         self._summary.setText(self._summarise(spec_sil, rfft_sil))
 
