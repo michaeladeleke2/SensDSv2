@@ -8,6 +8,7 @@ from ui import app_colors
 from ui.gamification import GamificationManager, GamificationBar
 from ui.spectrogram_widget import SpectrogramWidget, VisualizeTab
 from ui.collect_tab import CollectTab
+from ui.pca_tab import PcaTab
 from ui.train_tab import TrainTab
 from ui.test_tab import TestTab
 from ui.results_tab import ResultsTab
@@ -454,6 +455,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self._collect_tab = CollectTab()
         self._tabs.addTab(self._collect_tab, "🎙   Collect")
 
+        self._pca_tab = PcaTab()
+        self._tabs.addTab(self._pca_tab, "🔬   PCA")
+
         self._train_tab = TrainTab()
         self._tabs.addTab(self._train_tab, "🧠   Train")
 
@@ -466,11 +470,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self._vex_tab = VexAimTab()
         self._tabs.addTab(self._vex_tab, "🤖   VEX AIM")
 
-        self._tabs.addTab(PlaceholderTab(
+        self._resources_tab = PlaceholderTab(
             "Resources",
             "Reference materials, gesture guides, and project documentation — coming soon.",
             "📚"
-        ), "📚   Resources")
+        )
+        self._tabs.addTab(self._resources_tab, "📚   Resources")
 
         # Wire test → results live updates
         self._test_tab.prediction_made.connect(self._results_tab.add_prediction)
@@ -494,48 +499,50 @@ class MainWindow(QtWidgets.QMainWindow):
         """Attach the badge toast overlay to the central widget."""
         self._gami_bar.set_toast_parent(self.centralWidget())
 
+    @staticmethod
+    def _has_trained_model() -> bool:
+        models_root = os.path.join(os.path.expanduser("~"), "SensDSv2_data", "models")
+        if not os.path.isdir(models_root):
+            return False
+        return any(
+            os.path.isdir(os.path.join(models_root, d))
+            for d in os.listdir(models_root)
+            if not d.startswith(".")
+        )
+
     def _on_tab_clicked(self, index):
-        if index == 0 or index == 1:
+        # Dispatch on the widget, not the index, so inserting or reordering
+        # tabs cannot silently break the soft locks.
+        w = self._tabs.widget(index)
+
+        # Always accessible: Visualize, Collect, PCA, Resources.
+        if w in (self._visualize_tab, self._collect_tab, self._pca_tab,
+                 self._resources_tab):
             return
-        if index == 2:
+
+        if w is self._train_tab:
             self._train_tab.refresh()
             return
-        if index == 3:
-            models_root = os.path.join(os.path.expanduser("~"), "SensDSv2_data", "models")
-            has_model = os.path.isdir(models_root) and any(
-                os.path.isdir(os.path.join(models_root, d))
-                for d in os.listdir(models_root)
-                if not d.startswith(".")
-            ) if os.path.isdir(models_root) else False
-            if has_model:
+
+        if w is self._test_tab:
+            if self._has_trained_model():
                 self._test_tab.refresh()
                 return
             self._show_soft_lock("Train a model first before testing.")
             return
-        if index == 4:
+
+        if w is self._results_tab:
             if self._test_tab._model is not None:
                 return
             self._show_soft_lock("Test your model first before viewing results.")
             return
-        if index == 5:
-            models_root = os.path.join(os.path.expanduser("~"), "SensDSv2_data", "models")
-            has_model = (
-                os.path.isdir(models_root)
-                and any(
-                    os.path.isdir(os.path.join(models_root, d))
-                    for d in os.listdir(models_root)
-                    if not d.startswith(".")
-                )
-            ) if os.path.isdir(models_root) else False
-            if has_model:
+
+        if w is self._vex_tab:
+            if self._has_trained_model():
                 return
-            self._show_soft_lock(
-                "Train and test a model before using VEX AIM."
-            )
+            self._show_soft_lock("Train and test a model before using VEX AIM.")
             return
-        if index == 6:
-            # Resources tab is always accessible
-            return
+
         self._show_soft_lock(
             "Complete the previous steps first — this tab will unlock as you progress."
         )
@@ -551,10 +558,6 @@ class MainWindow(QtWidgets.QMainWindow):
         if self._bridge is not None:
             self._bridge.processor.reset()
 
-    # Tabs that auto-stream when active: {tab_index: with_display}
-    # Visualize (0) needs the display worker; Collect (1) only needs raw frames.
-    _AUTO_STREAM = {0: True, 1: False}
-
     def _on_tab_changed(self, new_index: int):
         """
         Called after the tab switch completes.
@@ -567,10 +570,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self._prev_tab_index = new_index
 
         # ── clean up the tab we just left ────────────────────────────────────
-        if old_index == 3:   # Test tab — stop any running game
+        old = self._tabs.widget(old_index)
+        if old is self._test_tab:
             self._test_tab.stop_all_games()
-        elif old_index == 5:  # VEX AIM — stop any running session
+        elif old is self._vex_tab:
             self._vex_tab.stop_if_running()
+        elif old is self._pca_tab:
+            self._pca_tab.stop_if_running()
 
         # ── apply streaming for the newly active tab ──────────────────────────
         self._apply_stream_for_tab(new_index)
@@ -585,14 +591,15 @@ class MainWindow(QtWidgets.QMainWindow):
         """
         if self._bridge is None:
             return
-        if index in self._AUTO_STREAM:
-            self._bridge.start_stream(with_display=self._AUTO_STREAM[index])
-        else:
-            # For game tabs (3, 5) the stop_all_games / stop_if_running calls
-            # above already emit stream_needed(False) which handles the stop.
-            # For non-streaming tabs (Train, Results, Resources) stop directly.
-            if index not in (3, 5):
-                self._bridge.stop_stream()
+        w = self._tabs.widget(index)
+        if w is self._visualize_tab:
+            self._bridge.start_stream(with_display=True)
+        elif w is self._collect_tab:
+            self._bridge.start_stream(with_display=False)
+        elif w not in (self._test_tab, self._vex_tab):
+            # Game tabs already emit stream_needed(False) via the stop calls
+            # above; everything else stops the radar directly.
+            self._bridge.stop_stream()
 
     # ── stream_needed handlers (called from tab signals) ─────────────────────
 
