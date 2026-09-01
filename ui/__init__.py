@@ -221,7 +221,7 @@ def is_dark_mode() -> bool:
 
 
 def app_colors() -> dict:
-    """Return a colour scheme dict adapted to the current system theme."""
+    """Return a color scheme dict adapted to the current system theme."""
     if is_dark_mode():
         return dict(
             bg='#1c1c1e',

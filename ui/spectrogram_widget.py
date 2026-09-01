@@ -17,7 +17,7 @@ from ui import app_colors, _scrollable_left
 DISPLAY_SECONDS = 5   # seconds of rolling history to show
 
 # ── Derived display constants ─────────────────────────────────────────────────
-# Defaults describe the STFT method (the historical behaviour):
+# Defaults describe the STFT method (the historical behavior):
 # COLS_PER_FRAME (= 2) new STFT columns arrive every frame (0.1 s = 10 fps)
 # STFT_NFFT = 1024, STFT_SHIFT = 56, so COLS_PER_FRAME = 128 // 56 = 2
 #
@@ -105,7 +105,7 @@ class VisualizeTab(QtWidgets.QWidget):
 
     The panel is the tuning surface for students working out what a spectrogram
     should look like. Axis controls are view-only and instant; the image
-    controls affect how the data is mapped to colour.
+    controls affect how the data is mapped to color.
 
     Switching method changes the representation everywhere — live view,
     collected training PNGs, and inference input — because all three route
@@ -123,7 +123,7 @@ class VisualizeTab(QtWidgets.QWidget):
          "Infineon SDK",
          "Builds a full Range-Doppler Map per frame, tracks the most energetic "
          "range bin (median-smoothed), and emits that Doppler slice.\n"
-         "512 Doppler bins x 1 column per frame. No MTI — range tracking "
+         "512 Doppler bins x 1 column per frame. No MTI; range tracking "
          "rejects clutter instead.\n"
          "Retrain before using a model with this representation."),
     ]
@@ -194,7 +194,7 @@ class VisualizeTab(QtWidgets.QWidget):
             lo=2, hi=int(round(max_v * 10)), init=int(round(max_v * 10)),
             tip=("How much of the velocity axis to show, in +/- m/s.\n\n"
                  "The radar can measure up to +/-%.2f m/s, but hand gestures\n"
-                 "only reach about +/-1.5 m/s — so most of the axis is empty\n"
+                 "only reach about +/-1.5 m/s, so most of the axis is empty\n"
                  "at full range. Zoom in to make the gesture track much larger."
                  % max_v),
             on_change=self._on_vel_changed,
@@ -336,13 +336,13 @@ class VisualizeTab(QtWidgets.QWidget):
         key = self._combo.currentData()
         if key == METHOD_INFINEON:
             self._desc.setText(
-                "512 bins x 1 col/frame  ·  range-tracked  ·  retrain models"
+                "512 bins x 1 col/frame  ·  range tracked  ·  retrain models"
             )
         else:
             self._desc.setText(
                 "1024 bins x 2 cols/frame  ·  MTI filtered  ·  current models"
             )
-        # The noise floor only affects the Infineon colour mapping.
+        # The noise floor only affects the Infineon color mapping.
         self._noise_lbl_row.setVisible(key == METHOD_INFINEON)
 
         # Nyquist differs slightly between methods; keep the slider in range.

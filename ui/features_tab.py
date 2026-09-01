@@ -219,7 +219,7 @@ class FeaturesTab(QtWidgets.QWidget):
         layout.addWidget(self._small("Y axis"))
         layout.addWidget(self._y_combo)
 
-        layout.addWidget(self._small("Colour by"))
+        layout.addWidget(self._small("Color by"))
         self._color_combo = QtWidgets.QComboBox()
         self._color_combo.addItem("Gesture", "gesture")
         self._color_combo.addItem("Student", "student")
@@ -230,8 +230,8 @@ class FeaturesTab(QtWidgets.QWidget):
 
         layout.addWidget(self._lbl("Export for CODAP"))
         note = QtWidgets.QLabel(
-            "Summary — one row per gesture, best for scatterplots.\n"
-            "Frames — one row per radar frame, keeps each gesture's "
+            "Summary: one row per gesture, best for scatterplots.\n"
+            "Frames: one row per radar frame, keeps each gesture's "
             "trajectory so you can plot speed against time.\n\n"
             "Drag the CSV onto codap.concord.org to open it."
         )
@@ -254,12 +254,12 @@ class FeaturesTab(QtWidgets.QWidget):
         layout.addStretch()
 
         layout.addWidget(HintCard([
-            "Every number here has real units — metres and m/s — so you can "
-            "sanity-check them against what your hand actually did.",
-            "A push moves toward the radar, so 'Distance travelled' is large. "
+            "Every number here has real units (meters and m/s), so you can "
+            "sanity check them against what your hand actually did.",
+            "A push moves toward the radar, so 'Distance traveled' is large. "
             "A swipe moves sideways, so it stays small.",
             "The radar measures motion toward and away from itself. Sideways "
-            "movement barely registers — that is why a swipe looks slow here.",
+            "movement barely registers, which is why a swipe looks slow here.",
             "Distance against speed separates the gestures better than two "
             "distance features or two speed features.",
         ], c=self._c))
@@ -374,7 +374,7 @@ class FeaturesTab(QtWidgets.QWidget):
 
     def _on_progress(self, i, total, name):
         self._progress.setValue(i)
-        self._msg.setText(f"Extracting {i}/{total} — {name}")
+        self._msg.setText(f"Extracting {i}/{total}: {name}")
 
     def _on_finished(self, records):
         self._cleanup_thread()
@@ -427,7 +427,7 @@ class FeaturesTab(QtWidgets.QWidget):
             rows = [r for r in self._records if r[group_key] == g]
             xs = [r["summary"][xk] for r in rows]
             ys = [r["summary"][yk] for r in rows]
-            colour = palette[i % len(palette)]
+            color = palette[i % len(palette)]
             tips = [
                 f"{r['student']} / {r['gesture']}\n{r['name']}\n"
                 f"{PF.feature_label(xk)}: {r['summary'][xk]:.4g}\n"
@@ -438,7 +438,7 @@ class FeaturesTab(QtWidgets.QWidget):
                 item = pg.ScatterPlotItem(
                     x=xs, y=ys, size=12,
                     pen=pg.mkPen(self._plot_bg, width=1),
-                    brush=pg.mkBrush(colour),
+                    brush=pg.mkBrush(color),
                     data=tips, hoverable=True,
                     tip=lambda x, y, data: data,
                 )
@@ -447,7 +447,7 @@ class FeaturesTab(QtWidgets.QWidget):
                 item = pg.ScatterPlotItem(
                     x=xs, y=ys, size=12,
                     pen=pg.mkPen(self._plot_bg, width=1),
-                    brush=pg.mkBrush(colour),
+                    brush=pg.mkBrush(color),
                 )
             self._plot.addItem(item)
             self._legend.addItem(item, f"{g}  ({len(rows)})")
@@ -459,7 +459,7 @@ class FeaturesTab(QtWidgets.QWidget):
         self._plot.enableAutoRange()
         self._caption.setText(
             f"{len(self._records)} samples  ·  X = {PF.feature_label(xk)}  ·  "
-            f"Y = {PF.feature_label(yk)}  ·  coloured by {group_key}  ·  "
+            f"Y = {PF.feature_label(yk)}  ·  colored by {group_key}  ·  "
             f"hover a point for details"
         )
 

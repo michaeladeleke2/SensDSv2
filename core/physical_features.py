@@ -77,7 +77,7 @@ def _doppler_window(n):
 # CSV columns, so re-enabling one is a matter of moving it into the list.
 ALL_SUMMARY_FEATURES = [
     ("range_mean_m",        "Distance from radar",    "m"),
-    ("range_travel_m",      "Distance travelled",     "m"),
+    ("range_travel_m",      "Distance traveled",      "m"),
     ("range_net_m",         "Net displacement",       "m"),
     ("range_toward_m",      "Movement toward radar",  "m"),
     ("radial_speed_max_ms", "Peak speed (toward/away)",  "m/s"),
@@ -114,7 +114,7 @@ ALL_FRAME_FEATURES = [
 # radial motion, so a purely sideways swipe registers very little speed.
 SUMMARY_FEATURES = [
     ("range_mean_m",         "Distance from radar",       "m"),
-    ("range_travel_m",       "Distance travelled",        "m"),
+    ("range_travel_m",       "Distance traveled",         "m"),
     ("radial_speed_max_ms",  "Peak speed (toward/away)",  "m/s"),
     ("radial_speed_mean_ms", "Mean speed (toward/away)",  "m/s"),
 ]

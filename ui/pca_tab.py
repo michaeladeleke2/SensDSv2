@@ -18,7 +18,7 @@ from ui import (HintCard, _scrollable_left, app_colors, is_dark_mode,
 MIN_CLASSES = 2
 MIN_SAMPLES = 6
 
-# Fixed palette so a gesture keeps the same colour in both plots.
+# Fixed palette so a gesture keeps the same color in both plots.
 # Two variants: the light one is too dark to read on a dark plot background
 # (notably the navy), the dark one washes out on white.
 CLASS_COLORS_LIGHT = [
@@ -153,12 +153,12 @@ class PcaWorker(QtCore.QObject):
 
             if len(kept) < MIN_SAMPLES:
                 self.error.emit(
-                    f"Only {len(kept)} usable samples — need at least {MIN_SAMPLES}."
+                    f"Only {len(kept)} usable samples, need at least {MIN_SAMPLES}."
                 )
                 return
             if len(set(kept)) < MIN_CLASSES:
                 self.error.emit(
-                    f"Only {len(set(kept))} gesture class found — need at least "
+                    f"Only {len(set(kept))} gesture class found, need at least "
                     f"{MIN_CLASSES}."
                 )
                 return
@@ -239,7 +239,7 @@ class PcaTab(QtWidgets.QWidget):
         note = QtWidgets.QLabel(
             "This compares two ways of describing the same capture:\n\n"
             "• Doppler domain: the spectrogram, ex. how fast things moved.\n\n"
-            "• Range domain: the range-FFT profile, ex. how far away "
+            "• Range domain: the range FFT profile, ex. how far away "
             "things were.\n\n"
             "Both are reduced to 2D with PCA. The one whose classes form "
             "tighter, more separated clusters is the better representation "
@@ -255,11 +255,11 @@ class PcaTab(QtWidgets.QWidget):
             "PCA finds the directions your data varies in most, then keeps "
             "the top two so it can be drawn on a flat plot.",
             "The silhouette score runs from -1 to +1. Above ~0.5 means classes "
-            "sit in clean, well-separated clusters.",
+            "sit in clean, well separated clusters.",
             "Explained variance tells you how much of the original detail "
             "survived the squash to 2D. Higher is more faithful.",
             "If neither representation separates well, the model will struggle "
-            "too — collect more samples or more distinct gestures.",
+            "too, so collect more samples or more distinct gestures.",
         ], c=self._c))
 
         self._run_btn = QtWidgets.QPushButton("▶  Run Analysis")
@@ -307,7 +307,7 @@ class PcaTab(QtWidgets.QWidget):
         layout.addWidget(zoom_button_row(self._spec_plot, self._c))
 
         layout.addWidget(self._measures(
-            "Measuring:  range-profile magnitude + phase  ·  32x32 each  ·  "
+            "Measuring:  range profile magnitude + phase  ·  32x32 each  ·  "
             "2048 features  ·  units linear amplitude and radians "
             "(phase dominates the variance)"
         ))
@@ -359,13 +359,13 @@ class PcaTab(QtWidgets.QWidget):
         return plot, legend
 
     def _set_axis_variance(self, plot, units, var):
-        plot.setLabel("bottom", f"PC1  ({units})  —  {var[0]:.1%} of variance",
+        plot.setLabel("bottom", f"PC1  ({units}),  {var[0]:.1%} of variance",
                       color=self._axis_color)
-        plot.setLabel("left", f"PC2  ({units})  —  {var[1]:.1%} of variance",
+        plot.setLabel("left", f"PC2  ({units}),  {var[1]:.1%} of variance",
                       color=self._axis_color)
 
     def _caption(self):
-        lbl = QtWidgets.QLabel("—")
+        lbl = QtWidgets.QLabel("")
         lbl.setObjectName("caption")
         return lbl
 
@@ -421,7 +421,7 @@ class PcaTab(QtWidgets.QWidget):
         self._run_btn.setEnabled(ready)
         if not ready and n == 0:
             self._status_msg.setText(
-                "No raw samples yet. Collect gestures first — each capture "
+                "No raw samples yet. Collect gestures first. Each capture "
                 "saves a sample_NNN_raw.npy alongside the spectrogram."
             )
         elif not ready:
@@ -450,7 +450,7 @@ class PcaTab(QtWidgets.QWidget):
 
     def _on_progress(self, i, total, name):
         self._progress.setValue(i)
-        self._status_msg.setText(f"Processing {i}/{total} — {name}")
+        self._status_msg.setText(f"Processing {i}/{total}: {name}")
 
     def _on_finished(self, spec_proj, spec_var, spec_sil,
                      rfft_proj, rfft_var, rfft_sil, labels):
@@ -458,7 +458,7 @@ class PcaTab(QtWidgets.QWidget):
         self._progress.setVisible(False)
         self._run_btn.setEnabled(True)
         self._refresh_btn.setEnabled(True)
-        self._status_msg.setText(f"Done — {len(labels)} samples analyzed.")
+        self._status_msg.setText(f"Done. {len(labels)} samples analyzed.")
 
         classes = sorted(set(labels))
         palette = class_colors()
@@ -509,7 +509,7 @@ class PcaTab(QtWidgets.QWidget):
 
         if best < 0.1:
             quality = ("Neither representation separates these gestures "
-                       "cleanly — the clusters overlap a lot.")
+                       "cleanly, the clusters overlap a lot.")
         elif best < 0.35:
             quality = "The better one separates them only weakly."
         elif best < 0.6:
@@ -520,8 +520,8 @@ class PcaTab(QtWidgets.QWidget):
         if diff < 0.02:
             return (f"Both representations perform about the same "
                     f"(silhouette {spec_sil:+.3f} vs {rfft_sil:+.3f}). {quality}")
-        return (f"{better} separates the gestures better than {worse} — "
-                f"silhouette {max(spec_sil, rfft_sil):+.3f} vs "
+        return (f"{better} separates the gestures better than {worse}. "
+                f"Silhouette {max(spec_sil, rfft_sil):+.3f} vs "
                 f"{min(spec_sil, rfft_sil):+.3f}, a gap of {diff:.3f}. {quality}")
 
     def _on_error(self, msg):
