@@ -230,10 +230,11 @@ class FeaturesTab(QtWidgets.QWidget):
 
         layout.addWidget(self._lbl("Export for CODAP"))
         note = QtWidgets.QLabel(
-            "Summary: one row per gesture, best for scatterplots.\n"
-            "Frames: one row per radar frame, keeps each gesture's "
-            "trajectory so you can plot speed against time.\n\n"
-            "Drag the CSV onto codap.concord.org to open it."
+            "Summary: one line for each gesture you recorded, holding its "
+            "four measurements. Use this to compare gestures.\n\n"
+            "Frames: one line for every picture the radar took, ten per "
+            "second. Use this to see how distance and speed changed while "
+            "a single gesture was happening."
         )
         note.setObjectName("note")
         note.setWordWrap(True)
@@ -245,7 +246,7 @@ class FeaturesTab(QtWidgets.QWidget):
         self._export_summary_btn.setEnabled(False)
         layout.addWidget(self._export_summary_btn)
 
-        self._export_frames_btn = QtWidgets.QPushButton("⤓  Per-frame CSV")
+        self._export_frames_btn = QtWidgets.QPushButton("⤓  Frames CSV")
         self._export_frames_btn.setObjectName("minor_btn")
         self._export_frames_btn.clicked.connect(self._export_frames)
         self._export_frames_btn.setEnabled(False)
