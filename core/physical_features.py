@@ -72,13 +72,16 @@ def _doppler_window(n):
 # ── Feature catalogue ────────────────────────────────────────────────────────
 # (key, human label, unit). Order drives the UI dropdowns and the CSV columns.
 
-SUMMARY_FEATURES = [
-    ("range_mean_m",        "Mean distance",          "m"),
+# Everything summarize() and frame_series() compute. summarize() still returns
+# all of these — only the exposed lists below drive the UI dropdowns and the
+# CSV columns, so re-enabling one is a matter of moving it into the list.
+ALL_SUMMARY_FEATURES = [
+    ("range_mean_m",        "Distance from radar",    "m"),
     ("range_travel_m",      "Distance travelled",     "m"),
     ("range_net_m",         "Net displacement",       "m"),
     ("range_toward_m",      "Movement toward radar",  "m"),
-    ("radial_speed_max_ms", "Peak radial speed",      "m/s"),
-    ("radial_speed_mean_ms", "Mean radial speed",     "m/s"),
+    ("radial_speed_max_ms", "Peak speed (toward/away)",  "m/s"),
+    ("radial_speed_mean_ms", "Mean speed (toward/away)", "m/s"),
     ("vel_peak_ms",         "Peak Doppler velocity",  "m/s"),
     ("vel_mean_ms",         "Mean Doppler velocity",  "m/s"),
     ("vel_std_ms",          "Velocity variability",   "m/s"),
@@ -93,15 +96,33 @@ SUMMARY_FEATURES = [
     ("n_frames",            "Frames captured",        "count"),
 ]
 
-FRAME_FEATURES = [
+ALL_FRAME_FEATURES = [
     ("time_s",            "Time",             "s"),
     ("range_m",           "Distance",         "m"),
+    ("radial_speed_ms",   "Speed (toward/away)", "m/s"),
     ("velocity_ms",       "Doppler velocity", "m/s"),
-    ("speed_ms",          "Speed",            "m/s"),
-    ("radial_speed_ms",   "Radial speed",     "m/s"),
+    ("speed_ms",          "Doppler speed",    "m/s"),
     ("accel_ms2",         "Acceleration",     "m/s²"),
     ("doppler_spread_ms", "Doppler spread",   "m/s"),
     ("energy",            "Return energy",    "a.u."),
+]
+
+# ── Exposed set ──────────────────────────────────────────────────────────────
+# Trimmed to distance and speed only: two of each, both measured the same way
+# (from how the tracked range changes between frames), so the whole tab can be
+# explained in one sentence. "toward/away" is literal — the radar measures
+# radial motion, so a purely sideways swipe registers very little speed.
+SUMMARY_FEATURES = [
+    ("range_mean_m",         "Distance from radar",       "m"),
+    ("range_travel_m",       "Distance travelled",        "m"),
+    ("radial_speed_max_ms",  "Peak speed (toward/away)",  "m/s"),
+    ("radial_speed_mean_ms", "Mean speed (toward/away)",  "m/s"),
+]
+
+FRAME_FEATURES = [
+    ("time_s",          "Time",                 "s"),
+    ("range_m",         "Distance",             "m"),
+    ("radial_speed_ms", "Speed (toward/away)",  "m/s"),
 ]
 
 SUMMARY_KEYS = [k for k, _, _ in SUMMARY_FEATURES]
@@ -109,14 +130,14 @@ FRAME_KEYS = [k for k, _, _ in FRAME_FEATURES]
 
 
 def feature_label(key: str) -> str:
-    for k, label, unit in SUMMARY_FEATURES + FRAME_FEATURES:
+    for k, label, unit in ALL_SUMMARY_FEATURES + ALL_FRAME_FEATURES:
         if k == key:
             return f"{label} ({unit})" if unit else label
     return key
 
 
 def feature_unit(key: str) -> str:
-    for k, _, unit in SUMMARY_FEATURES + FRAME_FEATURES:
+    for k, _, unit in ALL_SUMMARY_FEATURES + ALL_FRAME_FEATURES:
         if k == key:
             return unit
     return ""

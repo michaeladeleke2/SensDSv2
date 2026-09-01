@@ -250,14 +250,14 @@ class FeaturesTab(QtWidgets.QWidget):
         layout.addStretch()
 
         layout.addWidget(HintCard([
-            "Every number here has real units — metres, m/s — so you can "
+            "Every number here has real units — metres and m/s — so you can "
             "sanity-check them against what your hand actually did.",
             "A push moves toward the radar, so 'Distance travelled' is large. "
             "A swipe moves sideways, so it stays small.",
-            "Doppler spread measures how many different speeds are present "
-            "at once. A whole hand gives one speed; wiggling fingers give many.",
-            "Try plotting two features that measure different things — "
-            "distance against speed separates better than two speed features.",
+            "The radar measures motion toward and away from itself. Sideways "
+            "movement barely registers — that is why a swipe looks slow here.",
+            "Distance against speed separates the gestures better than two "
+            "distance features or two speed features.",
         ], c=self._c))
 
         self._msg = QtWidgets.QLabel("")
