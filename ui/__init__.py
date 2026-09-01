@@ -135,6 +135,44 @@ def _scrollable_left(content_widget: QtWidgets.QWidget, width: int = 300) -> QtW
     return scroll
 
 
+def zoom_button_row(plot, c: dict) -> QtWidgets.QWidget:
+    """
+    Zoom in / out / reset controls for a pyqtgraph PlotWidget.
+
+    Scroll-wheel zoom already works, but it isn't discoverable — these make it
+    obvious. Reset re-fits every point, which is also the recovery path if
+    someone zooms until the data is off screen.
+    """
+    row = QtWidgets.QWidget()
+    lay = QtWidgets.QHBoxLayout(row)
+    lay.setContentsMargins(0, 0, 0, 0)
+    lay.setSpacing(6)
+    lay.addStretch()
+
+    style = (
+        f"QPushButton {{ background: {c['panel']};"
+        f" border: 1px solid {c['input_border']}; border-radius: 5px;"
+        f" padding: 3px 10px; font-size: 13px; font-weight: bold;"
+        f" color: {c['accent']}; }}"
+        f"QPushButton:hover {{ background: {c['tab_hover']}; }}"
+    )
+    vb = plot.getViewBox()
+
+    def add(text, tip, fn, width):
+        b = QtWidgets.QPushButton(text)
+        b.setToolTip(tip)
+        b.setFixedWidth(width)
+        b.setStyleSheet(style)
+        b.clicked.connect(fn)
+        lay.addWidget(b)
+
+    # scaleBy < 1 shrinks the visible range, i.e. zooms in.
+    add("−", "Zoom out", lambda: vb.scaleBy((1.25, 1.25)), 34)
+    add("+", "Zoom in", lambda: vb.scaleBy((0.8, 0.8)), 34)
+    add("Reset", "Fit all points", lambda: vb.autoRange(), 58)
+    return row
+
+
 class HintCard(QtWidgets.QWidget):
     """Rotating hint card that cycles through a list of tip strings."""
 

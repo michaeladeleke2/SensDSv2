@@ -17,7 +17,8 @@ import pyqtgraph as pg
 from PyQt6 import QtCore, QtWidgets
 
 from core import physical_features as PF
-from ui import HintCard, _scrollable_left, app_colors, is_dark_mode
+from ui import (HintCard, _scrollable_left, app_colors, is_dark_mode,
+                zoom_button_row)
 
 CLASS_COLORS_LIGHT = [
     "#e74c3c", "#2980b9", "#27ae60", "#f39c12",
@@ -145,6 +146,9 @@ class FeaturesTab(QtWidgets.QWidget):
         self._axis_pen = pg.mkPen("#888899" if dark else "#999999")
         self._axis_color = "#cccccc" if dark else "#555555"
         self._title_color = "#e6e6e6" if dark else "#1a3a5c"
+        self._legend_bg = (30, 30, 46, 235) if dark else (255, 255, 255, 235)
+        self._legend_border = "#4a4a5a" if dark else "#cccccc"
+        self._legend_text = "#e6e6e6" if dark else "#333333"
 
         self._worker = None
         self._thread = None
@@ -286,9 +290,17 @@ class FeaturesTab(QtWidgets.QWidget):
             # rescales small values and appends its own "(x0.001)".
             axis.enableAutoSIPrefix(False)
         self._plot.showGrid(x=True, y=True, alpha=0.25)
-        self._legend = self._plot.addLegend(offset=(-10, 10),
-                                            labelTextColor=self._axis_color)
+        # An unbacked legend sits directly on top of the points and is hard to
+        # read; give it a solid panel and a border so it reads as an overlay.
+        self._legend = self._plot.addLegend(
+            offset=(-12, 12),
+            labelTextColor=self._legend_text,
+            labelTextSize="10pt",
+            brush=pg.mkBrush(self._legend_bg),
+            pen=pg.mkPen(self._legend_border),
+        )
         layout.addWidget(self._plot, 1)
+        layout.addWidget(zoom_button_row(self._plot, self._c))
 
         self._caption = QtWidgets.QLabel(
             "Extract features to plot them."

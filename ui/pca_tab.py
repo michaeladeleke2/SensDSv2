@@ -12,7 +12,8 @@ import pyqtgraph as pg
 from PyQt6 import QtCore, QtWidgets
 
 from core import pca_analysis as PA
-from ui import HintCard, _scrollable_left, app_colors, is_dark_mode
+from ui import (HintCard, _scrollable_left, app_colors, is_dark_mode,
+                zoom_button_row)
 
 MIN_CLASSES = 2
 MIN_SAMPLES = 6
@@ -188,6 +189,9 @@ class PcaTab(QtWidgets.QWidget):
         self._axis_color = "#cccccc" if dark else "#555555"
         self._title_color = "#e6e6e6" if dark else "#1a3a5c"
         self._point_pen = pg.mkPen(self._plot_bg, width=1)
+        self._legend_bg = (30, 30, 46, 235) if dark else (255, 255, 255, 235)
+        self._legend_border = "#4a4a5a" if dark else "#cccccc"
+        self._legend_text = "#e6e6e6" if dark else "#333333"
         self._worker = None
         self._thread = None
         self._paths = []
@@ -300,6 +304,7 @@ class PcaTab(QtWidgets.QWidget):
         self._spec_caption = self._caption()
         layout.addWidget(self._spec_plot, 1)
         layout.addWidget(self._spec_caption)
+        layout.addWidget(zoom_button_row(self._spec_plot, self._c))
 
         layout.addWidget(self._measures(
             "Measuring:  range-profile magnitude + phase  ·  32x32 each  ·  "
@@ -312,6 +317,7 @@ class PcaTab(QtWidgets.QWidget):
         self._rfft_caption = self._caption()
         layout.addWidget(self._rfft_plot, 1)
         layout.addWidget(self._rfft_caption)
+        layout.addWidget(zoom_button_row(self._rfft_plot, self._c))
 
         self._summary = QtWidgets.QLabel(
             "Run the analysis to compare the two representations."
@@ -342,8 +348,14 @@ class PcaTab(QtWidgets.QWidget):
             plot.getAxis(ax).setTextPen(pg.mkPen(self._axis_color))
         plot.showGrid(x=True, y=True, alpha=0.25)
         plot.setMinimumHeight(180)
-        legend = plot.addLegend(offset=(-10, 10),
-                                labelTextColor=self._axis_color)
+        # A backed legend stays readable where it overlaps the points.
+        legend = plot.addLegend(
+            offset=(-12, 12),
+            labelTextColor=self._legend_text,
+            labelTextSize="10pt",
+            brush=pg.mkBrush(self._legend_bg),
+            pen=pg.mkPen(self._legend_border),
+        )
         return plot, legend
 
     def _set_axis_variance(self, plot, units, var):
