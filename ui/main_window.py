@@ -8,6 +8,7 @@ from ui import app_colors
 from ui.gamification import GamificationManager, GamificationBar
 from ui.spectrogram_widget import SpectrogramWidget, VisualizeTab
 from ui.collect_tab import CollectTab
+from ui.features_tab import FeaturesTab
 from ui.pca_tab import PcaTab
 from ui.train_tab import TrainTab
 from ui.test_tab import TestTab
@@ -455,6 +456,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self._collect_tab = CollectTab()
         self._tabs.addTab(self._collect_tab, "🎙   Collect")
 
+        self._features_tab = FeaturesTab()
+        self._tabs.addTab(self._features_tab, "📈   Features")
+
         self._pca_tab = PcaTab()
         self._tabs.addTab(self._pca_tab, "🔬   PCA")
 
@@ -516,8 +520,8 @@ class MainWindow(QtWidgets.QMainWindow):
         w = self._tabs.widget(index)
 
         # Always accessible: Visualize, Collect, PCA, Resources.
-        if w in (self._visualize_tab, self._collect_tab, self._pca_tab,
-                 self._resources_tab):
+        if w in (self._visualize_tab, self._collect_tab, self._features_tab,
+                 self._pca_tab, self._resources_tab):
             return
 
         if w is self._train_tab:
@@ -577,6 +581,8 @@ class MainWindow(QtWidgets.QMainWindow):
             self._vex_tab.stop_if_running()
         elif old is self._pca_tab:
             self._pca_tab.stop_if_running()
+        elif old is self._features_tab:
+            self._features_tab.stop_if_running()
 
         # ── apply streaming for the newly active tab ──────────────────────────
         self._apply_stream_for_tab(new_index)
