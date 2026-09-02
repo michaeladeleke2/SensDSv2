@@ -12,7 +12,7 @@ from core.processing import (
     method_max_velocity, METHOD_STFT, METHOD_INFINEON,
     get_dynamic_range_db, set_dynamic_range_db,
 )
-from ui import app_colors, _scrollable_left
+from ui import app_colors, _scrollable_left, zoom_button_row
 
 DISPLAY_SECONDS = 5   # seconds of rolling history to show
 
@@ -146,7 +146,19 @@ class VisualizeTab(QtWidgets.QWidget):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
         outer.addWidget(self._build_panel())
-        outer.addWidget(self.spectrogram, 1)
+
+        # Spectrogram plus its zoom controls.
+        right = QtWidgets.QWidget()
+        rlay = QtWidgets.QVBoxLayout(right)
+        rlay.setContentsMargins(0, 0, 8, 6)
+        rlay.setSpacing(4)
+        rlay.addWidget(self.spectrogram, 1)
+        rlay.addWidget(zoom_button_row(
+            self.spectrogram._plot, self._c,
+            on_reset=self.spectrogram.reset_view,
+            reset_tip="Back to the slider settings",
+        ))
+        outer.addWidget(right, 1)
 
         self._sync_method_widgets()
         self._update_readout()
@@ -213,8 +225,11 @@ class VisualizeTab(QtWidgets.QWidget):
 
         self._time_slider, self._time_value = self._slider_row(
             layout, "Time window (X)",
-            lo=1, hi=15, init=int(round(self.spectrogram.time_window())),
+            lo=1, hi=60, init=int(round(self.spectrogram.time_window())),
             tip=("Seconds of history shown across the X axis.\n\n"
+                 "This also controls how fine the image looks: the radar\n"
+                 "produces a fixed number of columns per second, so a short\n"                 "window spreads few columns over the full width and looks\n"
+                 "blocky. Increase it for a finer picture.\n\n"
                  "Changing this resizes the scroll buffer, so the current\n"
                  "history clears and refills at the incoming frame rate."),
             on_change=self._on_time_changed,
@@ -478,6 +493,10 @@ class SpectrogramWidget(pg.GraphicsLayoutWidget):
         frac = self._vel_range / self._max_vel if self._max_vel else 1.0
         return max(1, int(round(self._freq_bins * frac)))
 
+    def reset_view(self):
+        """Restore the axes to the current slider settings."""
+        self._rescale_axes()
+
     def _rescale_axes(self):
         time_scale = self._display_seconds / self._width
         vel_scale  = (2 * self._max_vel) / self._freq_bins
@@ -496,7 +515,8 @@ class SpectrogramWidget(pg.GraphicsLayoutWidget):
         plot.setLabel('left', 'Velocity', units='m/s')
         plot.setLabel('bottom', 'Time', units='s')
         plot.hideButtons()
-        plot.setMouseEnabled(x=False, y=False)
+        # Scroll to zoom, drag to pan. Reset restores the slider view.
+        plot.setMouseEnabled(x=True, y=True)
 
         ax_left = plot.getAxis('left')
         ax_left.setTextPen(pg.mkPen('w'))

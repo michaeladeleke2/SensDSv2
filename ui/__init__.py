@@ -135,13 +135,15 @@ def _scrollable_left(content_widget: QtWidgets.QWidget, width: int = 300) -> QtW
     return scroll
 
 
-def zoom_button_row(plot, c: dict) -> QtWidgets.QWidget:
+def zoom_button_row(plot, c: dict, on_reset=None,
+                    reset_tip: str = "Fit all points") -> QtWidgets.QWidget:
     """
     Zoom in / out / reset controls for a pyqtgraph PlotWidget.
 
     Scroll-wheel zoom already works, but it isn't discoverable — these make it
-    obvious. Reset re-fits every point, which is also the recovery path if
-    someone zooms until the data is off screen.
+    obvious. Reset is the recovery path if someone zooms until the data is off
+    screen; pass on_reset when "fit the data" is not the right restore point,
+    as on the live spectrogram where the axes come from the sliders.
     """
     row = QtWidgets.QWidget()
     lay = QtWidgets.QHBoxLayout(row)
@@ -169,7 +171,7 @@ def zoom_button_row(plot, c: dict) -> QtWidgets.QWidget:
     # scaleBy < 1 shrinks the visible range, i.e. zooms in.
     add("−", "Zoom out", lambda: vb.scaleBy((1.25, 1.25)), 34)
     add("+", "Zoom in", lambda: vb.scaleBy((0.8, 0.8)), 34)
-    add("Reset", "Fit all points", lambda: vb.autoRange(), 58)
+    add("Reset", reset_tip, on_reset or (lambda: vb.autoRange()), 58)
     return row
 
 
