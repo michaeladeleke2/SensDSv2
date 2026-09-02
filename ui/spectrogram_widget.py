@@ -61,6 +61,12 @@ def _viz_style(c: dict) -> str:
         background: {c['input_bg']}; color: {c['text']}; max-height: 30px;
     }}
     QComboBox::drop-down {{ border: none; }}
+    QDoubleSpinBox {{
+        border: 1px solid {c['input_border']};
+        border-radius: 5px; padding: 4px 6px; font-size: 12px;
+        background: {c['input_bg']}; color: {c['text']}; max-height: 28px;
+    }}
+    QDoubleSpinBox:focus {{ border: 1px solid {c['accent']}; }}
     QComboBox QAbstractItemView {{
         background: {c['panel']}; color: {c['text']};
         border: 1px solid {c['border']};
@@ -201,16 +207,41 @@ class VisualizeTab(QtWidgets.QWidget):
         layout.addWidget(axes_lbl)
 
         max_v = self.spectrogram.max_velocity()
-        self._vel_slider, self._vel_value = self._slider_row(
-            layout, "Velocity range (Y)",
-            lo=2, hi=int(round(max_v * 10)), init=int(round(max_v * 10)),
-            tip=("How much of the velocity axis to show, in +/- m/s.\n\n"
-                 "The radar can measure up to +/-%.2f m/s, but hand gestures\n"
-                 "only reach about +/-1.5 m/s, so most of the axis is empty\n"
-                 "at full range. Zoom in to make the gesture track much larger."
-                 % max_v),
-            on_change=self._on_vel_changed,
-        )
+        vmin0, vmax0 = self.spectrogram.velocity_limits()
+
+        head = QtWidgets.QHBoxLayout()
+        head.setContentsMargins(0, 0, 0, 0)
+        name = QtWidgets.QLabel("Velocity range (Y)")
+        name.setObjectName("param_name")
+        head.addWidget(name)
+        head.addStretch()
+        self._vel_value = QtWidgets.QLabel()
+        self._vel_value.setObjectName("param_value")
+        head.addWidget(self._vel_value)
+        layout.addLayout(head)
+
+        tip = ("Type the exact velocity limits to display, in m/s.\n\n"
+               "The radar measures up to +/-%.2f m/s, but hand gestures only\n"
+               "reach about +/-1.5 m/s, so most of the axis is empty at full\n"
+               "range. The two ends are independent, so an asymmetric window\n"
+               "such as -0.5 to 3.0 can be used when a gesture sits mostly on\n"
+               "one side of zero.\n\n"
+               "View only: no data is discarded and nothing is recomputed."
+               % max_v)
+
+        vel_row = QtWidgets.QHBoxLayout()
+        vel_row.setSpacing(6)
+        self._vel_min_box = self._vel_spin(-max_v, max_v, vmin0, tip)
+        self._vel_max_box = self._vel_spin(-max_v, max_v, vmax0, tip)
+        for label, box in (("Min", self._vel_min_box), ("Max", self._vel_max_box)):
+            cap = QtWidgets.QLabel(label)
+            cap.setObjectName("desc")
+            vel_row.addWidget(cap)
+            vel_row.addWidget(box, 1)
+        layout.addLayout(vel_row)
+
+        self._vel_min_box.valueChanged.connect(self._on_vel_limits_changed)
+        self._vel_max_box.valueChanged.connect(self._on_vel_limits_changed)
 
         preset_row = QtWidgets.QHBoxLayout()
         preset_row.setSpacing(4)
@@ -317,14 +348,36 @@ class VisualizeTab(QtWidgets.QWidget):
 
     # ── handlers ─────────────────────────────────────────────────────────────
 
-    def _set_vel(self, value):
-        self._vel_slider.setValue(int(round(value * 10)))
+    def _vel_spin(self, lo, hi, init, tip):
+        box = QtWidgets.QDoubleSpinBox()
+        box.setDecimals(2)
+        box.setSingleStep(0.1)
+        box.setRange(lo, hi)
+        box.setValue(init)
+        box.setToolTip(tip)
+        box.setKeyboardTracking(False)   # apply on Enter / focus-out, not per digit
+        box.setMaximumWidth(82)          # keeps the pair inside the 300 px panel
+        return box
 
-    def _on_vel_changed(self, raw):
-        v = raw / 10.0
-        self.spectrogram.set_velocity_range(v)
-        self._vel_value.setText(f"+/-{v:.1f} m/s")
+    def _set_vel(self, value):
+        """Symmetric preset helper."""
+        self._apply_vel_limits(-abs(value), abs(value))
+
+    def _apply_vel_limits(self, vmin, vmax):
+        self.spectrogram.set_velocity_limits(vmin, vmax)
+        lo, hi = self.spectrogram.velocity_limits()
+        for box, v in ((self._vel_min_box, lo), (self._vel_max_box, hi)):
+            box.blockSignals(True)
+            box.setValue(v)
+            box.blockSignals(False)
+        self._vel_value.setText(f"{lo:.2f} .. {hi:.2f} m/s")
         self._update_readout()
+
+    def _on_vel_limits_changed(self, _=None):
+        # The widget clamps and enforces a minimum span; echo whatever it
+        # settled on back into the boxes so they never disagree with the plot.
+        self._apply_vel_limits(self._vel_min_box.value(),
+                               self._vel_max_box.value())
 
     def _on_time_changed(self, raw):
         self.spectrogram.set_time_window(float(raw))
@@ -360,17 +413,17 @@ class VisualizeTab(QtWidgets.QWidget):
         # The noise floor only affects the Infineon color mapping.
         self._noise_lbl_row.setVisible(key == METHOD_INFINEON)
 
-        # Nyquist differs slightly between methods; keep the slider in range.
+        # Nyquist differs slightly between methods; keep the boxes in range.
         max_v = self.spectrogram.max_velocity()
-        self._vel_slider.blockSignals(True)
-        self._vel_slider.setMaximum(int(round(max_v * 10)))
-        self._vel_slider.setValue(
-            int(round(self.spectrogram.velocity_range() * 10))
-        )
-        self._vel_slider.blockSignals(False)
+        lo, hi = self.spectrogram.velocity_limits()
+        for box, v in ((self._vel_min_box, lo), (self._vel_max_box, hi)):
+            box.blockSignals(True)
+            box.setRange(-max_v, max_v)
+            box.setValue(v)
+            box.blockSignals(False)
 
         # Refresh every value label to whatever the widget actually holds.
-        self._vel_value.setText(f"+/-{self.spectrogram.velocity_range():.1f} m/s")
+        self._vel_value.setText(f"{lo:.2f} .. {hi:.2f} m/s")
         self._time_value.setText(f"{int(self.spectrogram.time_window())} s")
         self._noise_value.setText(f"-{self._noise_slider.value()} dB")
         sm = self._smooth_slider.value()
@@ -382,12 +435,12 @@ class VisualizeTab(QtWidgets.QWidget):
         bins = sp.freq_bins()
         vis = sp.visible_bins()
         vel_per_bin = (2 * sp.max_velocity()) / bins
+        # Kept short: long lines here push the 300 px panel wider than it is.
         self._readout.setText(
-            f"Showing {vis} of {bins} Doppler bins "
-            f"({vis / bins:.0%} of the axis)\n"
-            f"Time resolution   {1000.0 / cps:.0f} ms per column\n"
-            f"Velocity per bin  {vel_per_bin:.3f} m/s\n"
-            f"Screen width      {int(round(sp.time_window() * cps))} columns"
+            f"Doppler bins   {vis} of {bins} ({vis / bins:.0%})\n"
+            f"Time step      {1000.0 / cps:.0f} ms/column\n"
+            f"Velocity step  {vel_per_bin:.3f} m/s/bin\n"
+            f"Screen width   {int(round(sp.time_window() * cps))} columns"
         )
 
     # Convenience passthrough so main_window can keep calling update_frame
@@ -402,7 +455,10 @@ class SpectrogramWidget(pg.GraphicsLayoutWidget):
         self._display_seconds = float(DISPLAY_SECONDS)
         self._smoothing = 1.5
         self._apply_method_dims()
-        self._vel_range = self._max_vel          # full Nyquist until zoomed
+        # Independent limits, not a symmetric +/- range: a push sits mostly
+        # on one side of zero, so an asymmetric window can use the whole plot.
+        self._vel_min = -self._max_vel
+        self._vel_max = self._max_vel
         self._col = 0
         self._setup_plot()
 
@@ -431,30 +487,52 @@ class SpectrogramWidget(pg.GraphicsLayoutWidget):
         self._method = method
         self._apply_method_dims()
         # Keep the user's zoom across the switch; the two methods have slightly
-        # different Nyquist limits, so clamp rather than reset.
-        if self._vel_range >= prev_max - 1e-6:
-            self._vel_range = self._max_vel
+        # different Nyquist limits, so clamp rather than reset. A window that
+        # was at full range stays at full range.
+        was_full = (self._vel_min <= -prev_max + 1e-6
+                    and self._vel_max >= prev_max - 1e-6)
+        if was_full:
+            self._vel_min, self._vel_max = -self._max_vel, self._max_vel
         else:
-            self._vel_range = min(self._vel_range, self._max_vel)
+            self._vel_min = max(-self._max_vel, self._vel_min)
+            self._vel_max = min(self._max_vel, self._vel_max)
         self._col = 0
         self._rescale_axes()
         self._img.setImage(self._buffer.T, autoLevels=False)
 
     # ── adjustable display parameters ────────────────────────────────────────
 
-    def set_velocity_range(self, vmax: float):
+    _MIN_VEL_SPAN = 0.2      # m/s; keeps the axis from collapsing
+
+    def set_velocity_limits(self, vmin: float, vmax: float):
         """
-        Zoom the velocity (Y) axis to +/- vmax m/s.
+        Set the velocity (Y) axis to an explicit vmin..vmax in m/s.
 
         View-only: the buffer still holds every Doppler bin, so this is instant
-        and never discards data. Hand gestures occupy roughly +/-1.5 m/s out of
-        a +/-6.2 m/s Nyquist range, so zooming makes the track far more legible.
+        and never discards data. Values are clamped to the radar's Nyquist
+        limit, and a minimum span is enforced so the axis cannot collapse.
         """
-        self._vel_range = max(0.1, min(float(vmax), self._max_vel))
-        self._plot.setYRange(-self._vel_range, self._vel_range, padding=0)
+        lim = self._max_vel
+        vmin = max(-lim, min(float(vmin), lim))
+        vmax = max(-lim, min(float(vmax), lim))
+        if vmax - vmin < self._MIN_VEL_SPAN:
+            vmax = min(lim, vmin + self._MIN_VEL_SPAN)
+            if vmax - vmin < self._MIN_VEL_SPAN:
+                vmin = max(-lim, vmax - self._MIN_VEL_SPAN)
+        self._vel_min, self._vel_max = vmin, vmax
+        self._plot.setYRange(vmin, vmax, padding=0)
+
+    def set_velocity_range(self, vmax: float):
+        """Convenience for a symmetric window: -vmax .. +vmax."""
+        v = abs(float(vmax))
+        self.set_velocity_limits(-v, v)
+
+    def velocity_limits(self):
+        return self._vel_min, self._vel_max
 
     def velocity_range(self) -> float:
-        return self._vel_range
+        """Half-span, for callers that only care how wide the window is."""
+        return (self._vel_max - self._vel_min) / 2.0
 
     def max_velocity(self) -> float:
         return self._max_vel
@@ -490,7 +568,8 @@ class SpectrogramWidget(pg.GraphicsLayoutWidget):
 
     def visible_bins(self) -> int:
         """How many Doppler bins fall inside the current velocity zoom."""
-        frac = self._vel_range / self._max_vel if self._max_vel else 1.0
+        span = self._vel_max - self._vel_min
+        frac = span / (2 * self._max_vel) if self._max_vel else 1.0
         return max(1, int(round(self._freq_bins * frac)))
 
     def reset_view(self):
@@ -505,7 +584,7 @@ class SpectrogramWidget(pg.GraphicsLayoutWidget):
                               .translate(0, -self._freq_bins / 2)
         )
         self._plot.setXRange(0, self._display_seconds, padding=0)
-        self._plot.setYRange(-self._vel_range, self._vel_range, padding=0)
+        self._plot.setYRange(self._vel_min, self._vel_max, padding=0)
 
     def _setup_plot(self):
         self.setBackground('#00008F')
