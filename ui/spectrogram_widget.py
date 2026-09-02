@@ -137,6 +137,15 @@ class VisualizeTab(QtWidgets.QWidget):
     # Velocity presets: hand gestures sit well inside the radar's Nyquist limit.
     _VEL_PRESETS = [("Gestures", 1.5), ("Wide", 3.0), ("Full", None)]
 
+    # Fixed sizes are matplotlib figure inches at 100 dpi, so they match a
+    # figsize=(w, h) figure pixel for pixel.
+    _PLOT_SIZES = [
+        ("Fill window", None),
+        ("Square  6.4 x 6.4 in", (640, 640)),
+        ("Wide  6.4 x 4.8 in", (640, 480)),
+        ("Large square  9 x 9 in", (900, 900)),
+    ]
+
     method_changed = QtCore.pyqtSignal(str)
 
     def __init__(self, parent=None):
@@ -158,7 +167,14 @@ class VisualizeTab(QtWidgets.QWidget):
         rlay = QtWidgets.QVBoxLayout(right)
         rlay.setContentsMargins(0, 0, 8, 6)
         rlay.setSpacing(4)
-        rlay.addWidget(self.spectrogram, 1)
+        # Stretches on both sides so a size-capped plot sits centred rather
+        # than pinned to the top-left corner of the pane.
+        plot_row = QtWidgets.QHBoxLayout()
+        plot_row.setContentsMargins(0, 0, 0, 0)
+        plot_row.addStretch()
+        plot_row.addWidget(self.spectrogram, 1)
+        plot_row.addStretch()
+        rlay.addLayout(plot_row, 1)
         rlay.addWidget(zoom_button_row(
             self.spectrogram._plot, self._c,
             on_reset=self.spectrogram.reset_view,
@@ -265,6 +281,28 @@ class VisualizeTab(QtWidgets.QWidget):
                  "history clears and refills at the incoming frame rate."),
             on_change=self._on_time_changed,
         )
+
+        head = QtWidgets.QHBoxLayout()
+        head.setContentsMargins(0, 0, 0, 0)
+        nm = QtWidgets.QLabel("Plot size")
+        nm.setObjectName("param_name")
+        head.addWidget(nm)
+        head.addStretch()
+        layout.addLayout(head)
+
+        self._size_combo = QtWidgets.QComboBox()
+        for label, value in self._PLOT_SIZES:
+            self._size_combo.addItem(label, value)
+        self._size_combo.setToolTip(
+            "How large the spectrogram is drawn.\n\n"
+            "Fill window uses all available space. The fixed sizes match a\n"
+            "matplotlib figure of the same inches at 100 dpi, so a 6.4 x 6.4\n"
+            "square here is the same size as figsize=(6.4, 6.4) there.\n\n"
+            "A smaller plot spreads the same columns over fewer pixels, which\n"
+            "also makes the image look less coarse."
+        )
+        self._size_combo.currentIndexChanged.connect(self._on_size_changed)
+        layout.addWidget(self._size_combo)
 
         layout.addWidget(self._divider())
 
@@ -391,6 +429,16 @@ class VisualizeTab(QtWidgets.QWidget):
     def _on_smooth_changed(self, raw):
         self.spectrogram.set_smoothing(raw / 10.0)
         self._smooth_value.setText("off" if raw == 0 else f"{raw / 10.0:.1f}")
+
+    def _on_size_changed(self):
+        size = self._size_combo.currentData()
+        big = 16777215      # Qt's QWIDGETSIZE_MAX
+        if size is None:
+            self.spectrogram.setMaximumSize(big, big)
+        else:
+            # Maximum, not fixed, so the plot still shrinks on a small screen
+            # instead of forcing the window wider than it fits.
+            self.spectrogram.setMaximumSize(size[0], size[1])
 
     def _on_method_changed(self):
         key = self._combo.currentData()
@@ -588,6 +636,12 @@ class SpectrogramWidget(pg.GraphicsLayoutWidget):
 
     def _setup_plot(self):
         self.setBackground('#00008F')
+        # pyqtgraph's ImageItem sets no smoothing hint, so it draws each cell as
+        # a hard block. matplotlib's imshow interpolates by default, which is
+        # why the same data looks smoother there. Turn interpolation on so a
+        # coarse column count reads as a continuous field rather than a grid.
+        self.setRenderHint(QtGui.QPainter.RenderHint.SmoothPixmapTransform, True)
+        self.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, True)
 
         plot = self.addPlot()
         self._plot = plot
