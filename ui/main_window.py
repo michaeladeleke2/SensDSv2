@@ -649,6 +649,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self._bridge.frame_ready.connect(self._vex_tab.on_spectrogram_frame)
             # raw_frame_ready → frame buffers in each tab (always connected,
             # but only arrive when the radar is actively streaming)
+            self._bridge.raw_frame_ready.connect(self._visualize_tab.on_raw_frame)
             self._bridge.raw_frame_ready.connect(self._collect_tab.on_raw_frame)
             self._bridge.raw_frame_ready.connect(self._test_tab.on_raw_frame)
             self._bridge.raw_frame_ready.connect(self._vex_tab.on_raw_frame)
@@ -710,6 +711,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._hint_label.setText(HINTS[self._hint_index])
 
     def closeEvent(self, event):
+        self._visualize_tab.stop_if_running()
         if self._bridge:
             self._bridge.shutdown()
         event.accept()

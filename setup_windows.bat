@@ -55,6 +55,7 @@ python -m pip install ^
     "pyqtgraph>=0.13.3" ^
     "numpy>=1.24.0" ^
     "scipy>=1.10.0" ^
+    "matplotlib>=3.5" ^
     "transformers>=4.30.0" ^
     "Pillow>=9.0.0" ^
     "accelerate" ^

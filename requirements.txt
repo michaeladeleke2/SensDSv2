@@ -25,6 +25,9 @@ scipy>=1.10.0
 torch
 torchvision
 
+# matplotlib: only used by the Visualize tab's reference comparison view
+matplotlib>=3.5
+
 transformers>=4.30.0
 Pillow>=9.0.0
 accelerate

@@ -147,12 +147,15 @@ class VisualizeTab(QtWidgets.QWidget):
     ]
 
     method_changed = QtCore.pyqtSignal(str)
+    reference_opened = QtCore.pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._c = app_colors()
         self.setObjectName("viz_root")
         self.setStyleSheet(_viz_style(self._c))
+
+        self._reference = None
 
         # Built first: the panel reads its slider limits off the widget.
         self.spectrogram = SpectrogramWidget()
@@ -169,12 +172,13 @@ class VisualizeTab(QtWidgets.QWidget):
         rlay.setSpacing(4)
         # Stretches on both sides so a size-capped plot sits centred rather
         # than pinned to the top-left corner of the pane.
-        plot_row = QtWidgets.QHBoxLayout()
-        plot_row.setContentsMargins(0, 0, 0, 0)
-        plot_row.addStretch()
-        plot_row.addWidget(self.spectrogram, 1)
-        plot_row.addStretch()
-        rlay.addLayout(plot_row, 1)
+        self._plot_row = QtWidgets.QHBoxLayout()
+        self._plot_row.setContentsMargins(0, 0, 0, 0)
+        self._plot_row.setSpacing(8)
+        self._plot_row.addStretch()
+        self._plot_row.addWidget(self.spectrogram, 1)
+        self._plot_row.addStretch()
+        rlay.addLayout(self._plot_row, 1)
         rlay.addWidget(zoom_button_row(
             self.spectrogram._plot, self._c,
             on_reset=self.spectrogram.reset_view,
@@ -304,6 +308,24 @@ class VisualizeTab(QtWidgets.QWidget):
         self._size_combo.currentIndexChanged.connect(self._on_size_changed)
         layout.addWidget(self._size_combo)
 
+        self._compare_check = QtWidgets.QCheckBox("Compare with reference view")
+        self._compare_check.setToolTip(
+            "Show the reference live spectrogram beside this one.\n\n"
+            "The right-hand plot is drawn by core/doppler_spectrogram_live.py,\n"
+            "an unmodified copy of the reference script, using its own\n"
+            "LiveDopplerProcessor and LiveSpectrogramPlot. Both panels are fed\n"
+            "the same radar frames, so any difference is in the code, not the\n"
+            "data.\n\n"
+            "Costs roughly 20% of a core while running."
+        )
+        self._compare_check.toggled.connect(self._on_compare_toggled)
+        layout.addWidget(self._compare_check)
+
+        self._compare_note = QtWidgets.QLabel("")
+        self._compare_note.setObjectName("desc")
+        self._compare_note.setWordWrap(True)
+        layout.addWidget(self._compare_note)
+
         layout.addWidget(self._divider())
 
         # ── image ────────────────────────────────────────────────────────────
@@ -421,6 +443,11 @@ class VisualizeTab(QtWidgets.QWidget):
         self.spectrogram.set_time_window(float(raw))
         self._time_value.setText(f"{raw} s")
         self._update_readout()
+        if self._reference is not None:
+            # history_length is fixed at construction, so rebuild it to keep
+            # both panels covering the same number of seconds.
+            self._close_reference()
+            self._open_reference()
 
     def _on_noise_changed(self, raw):
         set_dynamic_range_db(float(raw))
@@ -429,6 +456,52 @@ class VisualizeTab(QtWidgets.QWidget):
     def _on_smooth_changed(self, raw):
         self.spectrogram.set_smoothing(raw / 10.0)
         self._smooth_value.setText("off" if raw == 0 else f"{raw / 10.0:.1f}")
+
+    # ── reference comparison view ────────────────────────────────────────────
+
+    def _on_compare_toggled(self, on: bool):
+        if on:
+            self._open_reference()
+        else:
+            self._close_reference()
+
+    def _open_reference(self):
+        if self._reference is not None:
+            return
+        from ui.reference_view import ReferenceSpectrogramView
+        # Match the app panel's time span so the two are directly comparable.
+        frames = max(10, int(round(self.spectrogram.time_window() * 10)))
+        self._reference = ReferenceSpectrogramView(history_length=frames)
+        self._reference.error.connect(self._on_reference_error)
+        # Insert before the trailing stretch so both plots sit side by side.
+        self._plot_row.insertWidget(2, self._reference, 1)
+        if self._reference.is_ready:
+            self._compare_note.setText(
+                f"Right plot: reference script, {frames} frames "
+                f"({frames / 10:.0f} s), antenna 0"
+            )
+        self.reference_opened.emit()
+
+    def _close_reference(self):
+        if self._reference is None:
+            return
+        self._reference.shutdown()
+        self._plot_row.removeWidget(self._reference)
+        self._reference.deleteLater()
+        self._reference = None
+        self._compare_note.setText("")
+
+    def _on_reference_error(self, msg: str):
+        self._compare_note.setText(f"Reference view error: {msg.splitlines()[0]}")
+
+    def on_raw_frame(self, frame):
+        """Radar frames arrive here so the reference view can consume them."""
+        if self._reference is not None:
+            self._reference.on_raw_frame(frame)
+
+    def stop_if_running(self):
+        """Tear down the reference view's worker thread and figure."""
+        self._close_reference()
 
     def _on_size_changed(self):
         size = self._size_combo.currentData()
@@ -460,6 +533,11 @@ class VisualizeTab(QtWidgets.QWidget):
             )
         # The noise floor only affects the Infineon color mapping.
         self._noise_lbl_row.setVisible(key == METHOD_INFINEON)
+        # The reference script is the Infineon SDK implementation.
+        self._compare_check.setVisible(key == METHOD_INFINEON)
+        self._compare_note.setVisible(key == METHOD_INFINEON)
+        if key != METHOD_INFINEON and self._compare_check.isChecked():
+            self._compare_check.setChecked(False)
 
         # Nyquist differs slightly between methods; keep the boxes in range.
         max_v = self.spectrogram.max_velocity()
