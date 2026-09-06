@@ -286,6 +286,21 @@ class VisualizeTab(QtWidgets.QWidget):
             on_change=self._on_time_changed,
         )
 
+        self._flip_check = QtWidgets.QCheckBox("Flip velocity axis")
+        self._flip_check.setToolTip(
+            "Mirror the image vertically, leaving the axis numbers alone.\n\n"
+            "The reference script draws with origin=\"upper\", so its Doppler\n"
+            "bin 0 (the most negative bin after fftshift) lands at the top of\n"
+            "its plot, where its own axis reads +6.19 m/s. A hand moving\n"
+            "toward the radar therefore shows as negative there.\n\n"
+            "This app draws bin 0 at the bottom, which agrees with its axis.\n"
+            "Turn this on to sit the same way up as the reference for a\n"
+            "side-by-side comparison. Display only: the data and every\n"
+            "measurement are unchanged."
+        )
+        self._flip_check.toggled.connect(self._on_flip_toggled)
+        layout.addWidget(self._flip_check)
+
         head = QtWidgets.QHBoxLayout()
         head.setContentsMargins(0, 0, 0, 0)
         nm = QtWidgets.QLabel("Plot size")
@@ -457,6 +472,10 @@ class VisualizeTab(QtWidgets.QWidget):
         self.spectrogram.set_smoothing(raw / 10.0)
         self._smooth_value.setText("off" if raw == 0 else f"{raw / 10.0:.1f}")
 
+    def _on_flip_toggled(self, on: bool):
+        self.spectrogram.set_velocity_flipped(on)
+        self._update_readout()
+
     # ── reference comparison view ────────────────────────────────────────────
 
     def _on_compare_toggled(self, on: bool):
@@ -475,8 +494,14 @@ class VisualizeTab(QtWidgets.QWidget):
         self._reference.error.connect(self._on_reference_error)
         # Insert before the trailing stretch so both plots sit side by side.
         self._plot_row.insertWidget(2, self._reference, 1)
+        if self._reference.is_ready and not self._flip_check.isChecked():
+            self._compare_note.setText(
+                "Tip: the reference draws velocity the other way up. "
+                "Tick 'Flip velocity axis' to match it.\n"
+            )
         if self._reference.is_ready:
             self._compare_note.setText(
+                self._compare_note.text() +
                 f"Right plot: reference script, {frames} frames "
                 f"({frames / 10:.0f} s), antenna 0"
             )
@@ -566,7 +591,8 @@ class VisualizeTab(QtWidgets.QWidget):
             f"Doppler bins   {vis} of {bins} ({vis / bins:.0%})\n"
             f"Time step      {1000.0 / cps:.0f} ms/column\n"
             f"Velocity step  {vel_per_bin:.3f} m/s/bin\n"
-            f"Screen width   {int(round(sp.time_window() * cps))} columns"
+            f"Screen width   {int(round(sp.time_window() * cps))} columns\n"
+            f"Velocity up    {'negative (reference)' if sp.velocity_flipped() else 'positive'}"
         )
 
     # Convenience passthrough so main_window can keep calling update_frame
@@ -585,6 +611,9 @@ class SpectrogramWidget(pg.GraphicsLayoutWidget):
         # on one side of zero, so an asymmetric window can use the whole plot.
         self._vel_min = -self._max_vel
         self._vel_max = self._max_vel
+        # Draw the Doppler bins bottom-up (positive velocity at the top) or
+        # top-down. See set_velocity_flipped().
+        self._vel_flipped = False
         self._col = 0
         self._setup_plot()
 
@@ -627,6 +656,30 @@ class SpectrogramWidget(pg.GraphicsLayoutWidget):
         self._img.setImage(self._buffer.T, autoLevels=False)
 
     # ── adjustable display parameters ────────────────────────────────────────
+
+    def set_velocity_flipped(self, flipped: bool):
+        """
+        Mirror the image vertically without touching the axis labels.
+
+        The reference script draws its spectrogram with origin="upper", which
+        puts Doppler bin 0 — the most negative bin after fftshift — at the top
+        of the plot, where its own axis reads +6.19 m/s. So a hand approaching
+        the radar appears there as negative. This app draws bin 0 at the
+        bottom, which agrees with its axis.
+
+        Turning this on mirrors this view to sit the same way up as the
+        reference, for side-by-side comparison. It changes only how the rows
+        are drawn: the data, the axis numbers and every measurement are
+        untouched.
+        """
+        flipped = bool(flipped)
+        if flipped == self._vel_flipped:
+            return
+        self._vel_flipped = flipped
+        self._rescale_axes()
+
+    def velocity_flipped(self) -> bool:
+        return self._vel_flipped
 
     _MIN_VEL_SPAN = 0.2      # m/s; keeps the axis from collapsing
 
@@ -705,6 +758,8 @@ class SpectrogramWidget(pg.GraphicsLayoutWidget):
     def _rescale_axes(self):
         time_scale = self._display_seconds / self._width
         vel_scale  = (2 * self._max_vel) / self._freq_bins
+        if self._vel_flipped:
+            vel_scale = -vel_scale     # mirror the rows, leave the axis alone
         self._img.setTransform(
             QtGui.QTransform().scale(time_scale, vel_scale)
                               .translate(0, -self._freq_bins / 2)
