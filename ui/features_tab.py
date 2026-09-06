@@ -14,7 +14,7 @@ import os
 
 import numpy as np
 import pyqtgraph as pg
-from PyQt6 import QtCore, QtWidgets
+from PyQt6 import QtCore, QtGui, QtWidgets
 
 from core import physical_features as PF
 from ui import (HintCard, _scrollable_left, app_colors, is_dark_mode,
@@ -40,6 +40,20 @@ def _style(c: dict) -> str:
     QWidget#left_panel {{
         background: {c['panel']};
         border-right: 1px solid {c['border']};
+    }}
+    QWidget#detail_panel {{
+        background: {c['panel']};
+        border-left: 1px solid {c['border']};
+    }}
+    QLabel#detail_meta {{ font-size: 12px; color: {c['text']}; }}
+    QLabel#feat_name {{ font-size: 11px; color: {c['subtext']}; }}
+    QLabel#feat_val  {{ font-size: 12px; color: {c['text']}; }}
+    QLabel#img_frame {{
+        background: {c['input_bg']};
+        border: 1px solid {c['input_border']};
+        border-radius: 5px;
+        color: {c['faint']};
+        font-size: 11px;
     }}
     QLabel#heading {{
         font-size: 16px; font-weight: bold; color: {c['accent']};
@@ -122,6 +136,10 @@ class FeatureWorker(QtCore.QObject):
                     "student": s["student"],
                     "gesture": s["gesture"],
                     "name": s["name"],
+                    "path": s["path"],
+                    # Resolved here rather than on click so the disk check
+                    # stays off the UI thread.
+                    "png": PF.png_for_sample(s["path"]),
                     "summary": summary,
                     "series": series,
                 })
@@ -135,6 +153,12 @@ class FeatureWorker(QtCore.QObject):
 
 
 class FeaturesTab(QtWidgets.QWidget):
+    # Detail column width, and the box the sample's PNG is drawn into. The
+    # PNG is saved 400x300, so 264x198 shows it at native aspect with no crop.
+    DETAIL_W = 300
+    IMG_W = 264
+    IMG_H = 198
+
     def __init__(self):
         super().__init__()
         self._c = app_colors()
@@ -154,6 +178,8 @@ class FeaturesTab(QtWidgets.QWidget):
         self._thread = None
         self._samples = []
         self._records = []
+        self._selected = None
+        self._highlight = None
 
         self._setup_ui()
         self.refresh()
@@ -166,6 +192,7 @@ class FeaturesTab(QtWidgets.QWidget):
         outer.setSpacing(0)
         outer.addWidget(self._build_left())
         outer.addWidget(self._build_right(), 1)
+        outer.addWidget(self._build_detail())
 
     def _build_left(self):
         panel = QtWidgets.QWidget()
@@ -263,6 +290,9 @@ class FeaturesTab(QtWidgets.QWidget):
             "movement barely registers, which is why a swipe looks slow here.",
             "Distance against speed separates the gestures better than two "
             "distance features or two speed features.",
+            "Click a point to see the spectrogram it came from. A point sitting "
+            "far from the rest of its group is usually a recording that went "
+            "wrong, and the picture will show you how.",
         ], c=self._c))
 
         self._msg = QtWidgets.QLabel("")
@@ -310,6 +340,91 @@ class FeaturesTab(QtWidgets.QWidget):
         self._caption.setWordWrap(True)
         layout.addWidget(self._caption)
         return panel
+
+    def _build_detail(self):
+        """Right-hand column: the spectrogram and numbers behind one point."""
+        panel = QtWidgets.QWidget()
+        panel.setObjectName("detail_panel")
+        layout = QtWidgets.QVBoxLayout(panel)
+        layout.setContentsMargins(18, 18, 18, 18)
+        layout.setSpacing(8)
+
+        heading = QtWidgets.QLabel("Selected Sample")
+        heading.setObjectName("heading")
+        layout.addWidget(heading)
+        layout.addWidget(self._divider())
+
+        self._detail_hint = QtWidgets.QLabel(
+            "Click any point on the plot to see the recording it came from — "
+            "its spectrogram picture and all of its measurements."
+        )
+        self._detail_hint.setObjectName("note")
+        self._detail_hint.setWordWrap(True)
+        layout.addWidget(self._detail_hint)
+
+        # Everything below stays hidden until a point is picked, so the panel
+        # is not a column of empty dashes on first open.
+        self._detail_body = QtWidgets.QWidget()
+        body = QtWidgets.QVBoxLayout(self._detail_body)
+        body.setContentsMargins(0, 0, 0, 0)
+        body.setSpacing(8)
+
+        self._img_label = QtWidgets.QLabel()
+        self._img_label.setObjectName("img_frame")
+        self._img_label.setFixedSize(self.IMG_W, self.IMG_H)
+        self._img_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        self._img_label.setWordWrap(True)
+        body.addWidget(self._img_label)
+
+        self._img_caption = QtWidgets.QLabel("")
+        self._img_caption.setObjectName("hintmsg")
+        self._img_caption.setWordWrap(True)
+        body.addWidget(self._img_caption)
+
+        self._detail_meta = QtWidgets.QLabel("")
+        self._detail_meta.setObjectName("detail_meta")
+        self._detail_meta.setWordWrap(True)
+        body.addWidget(self._detail_meta)
+
+        body.addWidget(self._divider())
+        body.addWidget(self._lbl("Measurements"))
+
+        grid = QtWidgets.QGridLayout()
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(6)
+        self._feat_rows = {}
+        for row, (key, label, unit) in enumerate(PF.SUMMARY_FEATURES):
+            name = QtWidgets.QLabel(label)
+            name.setObjectName("feat_name")
+            name.setWordWrap(True)
+            value = QtWidgets.QLabel("—")
+            value.setObjectName("feat_val")
+            value.setAlignment(
+                QtCore.Qt.AlignmentFlag.AlignRight
+                | QtCore.Qt.AlignmentFlag.AlignVCenter
+            )
+            grid.addWidget(name, row, 0)
+            grid.addWidget(value, row, 1)
+            self._feat_rows[key] = (name, value, unit)
+        grid.setColumnStretch(0, 1)
+        body.addLayout(grid)
+
+        self._axis_note = QtWidgets.QLabel("")
+        self._axis_note.setObjectName("hintmsg")
+        self._axis_note.setWordWrap(True)
+        body.addWidget(self._axis_note)
+
+        self._open_sample_btn = QtWidgets.QPushButton("🗀  Show in Folder")
+        self._open_sample_btn.setObjectName("minor_btn")
+        self._open_sample_btn.clicked.connect(self._open_selected_folder)
+        body.addWidget(self._open_sample_btn)
+
+        self._detail_body.setVisible(False)
+        layout.addWidget(self._detail_body)
+        layout.addStretch()
+
+        return _scrollable_left(panel, width=self.DETAIL_W)
 
     def _lbl(self, text):
         w = QtWidgets.QLabel(text)
@@ -380,6 +495,8 @@ class FeaturesTab(QtWidgets.QWidget):
     def _on_finished(self, records):
         self._cleanup_thread()
         self._records = records
+        # The old selection points at a record object that no longer exists.
+        self._clear_selection()
         self._progress.setVisible(False)
         self._extract_btn.setEnabled(True)
         self._refresh_btn.setEnabled(True)
@@ -421,6 +538,8 @@ class FeaturesTab(QtWidgets.QWidget):
 
         self._plot.clear()
         self._legend.clear()
+        # clear() already dropped the ring; forget it so it is not removed twice.
+        self._highlight = None
 
         groups = sorted({r[group_key] for r in self._records})
         palette = class_colors()
@@ -429,19 +548,15 @@ class FeaturesTab(QtWidgets.QWidget):
             xs = [r["summary"][xk] for r in rows]
             ys = [r["summary"][yk] for r in rows]
             color = palette[i % len(palette)]
-            tips = [
-                f"{r['student']} / {r['gesture']}\n{r['name']}\n"
-                f"{PF.feature_label(xk)}: {r['summary'][xk]:.4g}\n"
-                f"{PF.feature_label(yk)}: {r['summary'][yk]:.4g}"
-                for r in rows
-            ]
+            # Each spot carries its own record, so a click can find its way
+            # back to the sample's spectrogram and measurements.
             try:
                 item = pg.ScatterPlotItem(
                     x=xs, y=ys, size=12,
                     pen=pg.mkPen(self._plot_bg, width=1),
                     brush=pg.mkBrush(color),
-                    data=tips, hoverable=True,
-                    tip=lambda x, y, data: data,
+                    data=rows, hoverable=True,
+                    tip=self._point_tip,
                 )
             except TypeError:
                 # Older pyqtgraph without hoverable/tip support.
@@ -449,7 +564,9 @@ class FeaturesTab(QtWidgets.QWidget):
                     x=xs, y=ys, size=12,
                     pen=pg.mkPen(self._plot_bg, width=1),
                     brush=pg.mkBrush(color),
+                    data=rows,
                 )
+            item.sigClicked.connect(self._on_point_clicked)
             self._plot.addItem(item)
             self._legend.addItem(item, f"{g}  ({len(rows)})")
 
@@ -461,8 +578,133 @@ class FeaturesTab(QtWidgets.QWidget):
         self._caption.setText(
             f"{len(self._records)} samples  ·  X = {PF.feature_label(xk)}  ·  "
             f"Y = {PF.feature_label(yk)}  ·  colored by {group_key}  ·  "
-            f"hover a point for details"
+            f"click a point to see its spectrogram"
         )
+
+        # Swapping axes moves the selected sample and changes which two of its
+        # measurements are the ones on screen, so redraw the panel too.
+        if self._selected is not None:
+            self._show_record(self._selected)
+
+    def _point_tip(self, x, y, data):
+        if not isinstance(data, dict):
+            return ""
+        xk = self._x_combo.currentData()
+        yk = self._y_combo.currentData()
+        return (
+            f"{data['student']} / {data['gesture']}\n{data['name']}\n"
+            f"{PF.feature_label(xk)}: {x:.4g}\n"
+            f"{PF.feature_label(yk)}: {y:.4g}\n"
+            f"Click to open this sample"
+        )
+
+    # ── point selection ──────────────────────────────────────────────────────
+
+    def _on_point_clicked(self, *args):
+        # sigClicked is (item, points, event) on current pyqtgraph and
+        # (item, points) on older builds; points is second either way.
+        points = args[1] if len(args) > 1 else ()
+        if len(points) == 0:
+            return
+        record = points[0].data()
+        if isinstance(record, dict):
+            self._show_record(record)
+
+    def _clear_selection(self):
+        self._selected = None
+        self._highlight = None
+        self._detail_body.setVisible(False)
+        self._detail_hint.setVisible(True)
+
+    def _show_record(self, record):
+        self._selected = record
+        self._detail_hint.setVisible(False)
+        self._detail_body.setVisible(True)
+
+        png = record.get("png")
+        pixmap = QtGui.QPixmap(png) if png else QtGui.QPixmap()
+        if pixmap.isNull():
+            self._img_label.setPixmap(QtGui.QPixmap())
+            self._img_label.setText(
+                "No spectrogram image was saved next to this recording."
+            )
+            self._img_caption.setText("")
+        else:
+            self._img_label.setText("")
+            self._img_label.setPixmap(pixmap.scaled(
+                self.IMG_W, self.IMG_H,
+                QtCore.Qt.AspectRatioMode.KeepAspectRatio,
+                QtCore.Qt.TransformationMode.SmoothTransformation,
+            ))
+            self._img_caption.setText(
+                "Time runs left to right. Velocity runs bottom to top with "
+                "zero in the middle, so motion toward the radar sits above "
+                "the center line. This is the picture the model is trained on."
+            )
+
+        n_frames = len(record["series"]["time_s"])
+        self._detail_meta.setText(
+            f"<b>{record['gesture']}</b> &nbsp;·&nbsp; {record['student']}<br>"
+            f"{record['name']}<br>"
+            f"{n_frames} frames &nbsp;·&nbsp; {n_frames * PF.FRAME_S:.1f} s"
+        )
+
+        xk = self._x_combo.currentData()
+        yk = self._y_combo.currentData()
+        for key, (name, value, unit) in self._feat_rows.items():
+            v = record["summary"][key]
+            value.setText(f"{v:.3f} {unit}".strip())
+            on_axis = key in (xk, yk)
+            # Inline styles only where a row is highlighted; an empty sheet
+            # falls back to the #feat_name / #feat_val rules.
+            value.setStyleSheet(
+                f"color: {self._c['accent']}; font-weight: bold;"
+                if on_axis else ""
+            )
+            name.setStyleSheet(
+                f"color: {self._c['text']}; font-weight: bold;"
+                if on_axis else ""
+            )
+        self._axis_note.setText(
+            "The two highlighted rows are what the plot is showing."
+        )
+
+        self._mark_selected()
+
+    def _mark_selected(self):
+        """Ring the selected point so it is findable among its neighbors."""
+        if self._highlight is not None:
+            self._plot.removeItem(self._highlight)
+            self._highlight = None
+        if self._selected is None or not self._records:
+            return
+        xk = self._x_combo.currentData()
+        yk = self._y_combo.currentData()
+        self._highlight = pg.ScatterPlotItem(
+            x=[self._selected["summary"][xk]],
+            y=[self._selected["summary"][yk]],
+            size=24, symbol="o",
+            pen=pg.mkPen(self._c["accent"], width=3),
+            brush=None,
+        )
+        self._highlight.setZValue(20)
+        self._plot.addItem(self._highlight)
+
+    def _open_selected_folder(self):
+        if self._selected is None:
+            return
+        folder = os.path.dirname(self._selected["path"])
+        if not os.path.isdir(folder):
+            self._msg.setText("✗  That folder no longer exists.")
+            return
+        import subprocess
+        import sys
+        if sys.platform == "darwin":
+            subprocess.Popen(["open", folder])
+        elif sys.platform == "win32":
+            subprocess.Popen(["explorer", folder])
+        else:
+            subprocess.Popen(["xdg-open", folder])
 
     # ── export ───────────────────────────────────────────────────────────────
 

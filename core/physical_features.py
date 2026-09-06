@@ -293,6 +293,23 @@ def extract(cube: np.ndarray):
 
 # ── Dataset scanning ─────────────────────────────────────────────────────────
 
+def png_for_sample(raw_path: str) -> str | None:
+    """
+    The training PNG the Collect tab saved beside a raw cube, or None.
+
+    Captures are written as a trio — sample_NNN.npy (the spectrogram),
+    sample_NNN_raw.npy (the cube these features come from) and sample_NNN.png
+    (the image the model is trained on). Older captures predate the cube, and
+    a folder can be pruned by hand, so the PNG is never assumed to exist.
+    """
+    suffix = "_raw.npy"
+    if raw_path.endswith(suffix):
+        candidate = raw_path[: -len(suffix)] + ".png"
+    else:
+        candidate = os.path.splitext(raw_path)[0] + ".png"
+    return candidate if os.path.isfile(candidate) else None
+
+
 def scan_samples(data_root: str | None = None) -> list:
     """Every raw sample as {path, student, gesture, name}, sorted."""
     root = data_root or DATA_ROOT
