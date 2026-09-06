@@ -11,6 +11,17 @@ from ui.spectrogram_widget import (
 import pyqtgraph as pg
 
 
+def _is_sample_file(fname: str) -> bool:
+    """
+    True for the one file that represents a collected sample.
+
+    A capture writes three files: sample_NNN.npy (processed spectrogram),
+    sample_NNN.png (training image) and sample_NNN_raw.npy (raw radar cube).
+    Only the first counts as "a sample" — counting every .npy would double it.
+    """
+    return fname.endswith(".npy") and not fname.endswith("_raw.npy")
+
+
 def _apply_jet_colormap(normalized):
     r = np.zeros_like(normalized)
     g = np.zeros_like(normalized)
@@ -480,7 +491,11 @@ class CollectTab(QtWidgets.QWidget):
                 for gesture in sorted(os.listdir(student_dir)):
                     gpath = os.path.join(student_dir, gesture)
                     if os.path.isdir(gpath):
-                        count = sum(1 for f in os.listdir(gpath) if f.endswith('.npy'))
+                        # Each capture writes both sample_NNN.npy and
+                        # sample_NNN_raw.npy; counting every .npy would report
+                        # twice the number of samples actually collected.
+                        count = sum(1 for f in os.listdir(gpath)
+                                    if _is_sample_file(f))
                         if count > 0:
                             gestures[gesture] = count
             except OSError:
@@ -648,8 +663,7 @@ class CollectTab(QtWidgets.QWidget):
         self._refresh_counts()
         self._open_folder_btn.setEnabled(True)
         total_in_folder = sum(
-            1 for f in os.listdir(self._save_dir)
-            if f.endswith(".npy") and not f.endswith("_raw.npy")
+            1 for f in os.listdir(self._save_dir) if _is_sample_file(f)
         )
         gesture_label = self._gesture_combo.currentText().strip()
         raw_shape = "x".join(str(d) for d in raw_cube.shape)
