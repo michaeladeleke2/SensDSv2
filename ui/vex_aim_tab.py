@@ -155,7 +155,7 @@ def _frames_to_pil(frames: list):
     Uses last EPOCH_FRAMES (30) frames matching the 3-second training window.
     """
     from PIL import Image
-    from core.processing import EPOCH_FRAMES, epoch_spectrogram_db
+    from core.processing import EPOCH_FRAMES, epoch_spectrogram_db, image_rows
     if len(frames) < 10:
         return None
     try:
@@ -170,7 +170,9 @@ def _frames_to_pil(frames: list):
         smoothed   = gaussian_filter(spect_db, sigma=[1.0, 0.5])
         clipped    = np.clip(smoothed, DB_MIN, DB_MAX)
         normalized = (clipped - DB_MIN) / (DB_MAX - DB_MIN)
-        colored    = np.ascontiguousarray(_apply_jet(normalized)[::-1])
+        # Same row order the Collect tab saved with, or the model sees its
+        # training images upside down.
+        colored    = image_rows(_apply_jet(normalized))
         return Image.fromarray(colored, "RGB").resize((224, 224), Image.BILINEAR)
     except Exception:
         return None
@@ -232,7 +234,7 @@ class InferenceWorker(QtCore.QObject):
                 import torch
             except ImportError as ie:
                 self.error.emit(
-                    "PyTorch could not load — a required DLL is missing.\n\n"
+                    "PyTorch could not load. A required DLL is missing.\n\n"
                     "Fix: run  setup_windows.bat  to install the CPU-only build of "
                     "PyTorch, which works on all Windows devices.\n\n"
                     f"(Technical detail: {ie})"
@@ -241,7 +243,7 @@ class InferenceWorker(QtCore.QObject):
 
             img = _frames_to_pil(self._frames)
             if img is None:
-                self.error.emit("Not enough radar frames — connect the radar first.")
+                self.error.emit("Not enough radar frames. Connect the radar first.")
                 return
             from core.platform_utils import get_device
             device = get_device()
@@ -307,7 +309,7 @@ class DriveWorker(QtCore.QObject):
                 )
                 if err_count >= self._MAX_ERRORS:
                     self.log_msg.emit(
-                        "Robot is not responding — it may have been powered off."
+                        "Robot is not responding. It may have been powered off."
                     )
                     self.robot_lost.emit()
                     self._running = False
@@ -513,7 +515,7 @@ class VexAimTab(QtWidgets.QWidget):
             "Confidence threshold: the robot only reacts when the model is at least "
             "this sure. Raise it to cut false moves; lower it if the robot ignores you.",
             "If the robot powers off mid-session the app detects it automatically "
-            "and stops safely — just reconnect when it's back on.",
+            "and stops safely. Just reconnect when it's back on.",
             "Getting wrong commands? Go to Collect, add more samples "
             "for that gesture, then retrain your model.",
         ]))
@@ -566,10 +568,10 @@ class VexAimTab(QtWidgets.QWidget):
 
         details = QtWidgets.QHBoxLayout()
         details.setSpacing(24)
-        self._pred_conf = QtWidgets.QLabel("Confidence: —")
+        self._pred_conf = QtWidgets.QLabel("Confidence: not yet")
         self._pred_conf.setStyleSheet("font-size: 14px; color: #555; border: none;")
         details.addWidget(self._pred_conf)
-        self._pred_cmd = QtWidgets.QLabel("Command sent: —")
+        self._pred_cmd = QtWidgets.QLabel("Command sent: none yet")
         self._pred_cmd.setStyleSheet(
             "font-size: 14px; color: #27ae60; font-weight: bold; border: none;"
         )
@@ -665,7 +667,7 @@ class VexAimTab(QtWidgets.QWidget):
     @QtCore.pyqtSlot()
     def _on_robot_lost(self):
         """Called via signal from DriveWorker when the robot stops responding."""
-        self._log("⚠ Robot connection lost — it may have been powered off.")
+        self._log("⚠ Robot connection lost. It may have been powered off.")
         self._robot_status.setText("⬤  Connection lost")
         self._robot_status.setStyleSheet("color: #c0392b; font-size: 12px;")
         # Clear drive state without calling stop_all_movement (robot is gone)
@@ -786,7 +788,7 @@ class VexAimTab(QtWidgets.QWidget):
         self._capturing = False
         frames = list(self._capture_frames)
         if len(frames) < 5:
-            self._log("Too few frames — connect the radar and try again.")
+            self._log("Too few frames. Connect the radar and try again.")
             self._refresh_start_btn()
             self.stream_needed.emit(False)   # abort — stop radar
             return
@@ -796,7 +798,7 @@ class VexAimTab(QtWidgets.QWidget):
     # ── robosoccer ────────────────────────────────────────────────────────────
 
     def _start_robosoccer(self):
-        self._log("Starting RoboSoccer — robot moving forward…")
+        self._log("Starting RoboSoccer. Robot moving forward…")
         self._start_btn.setVisible(False)
         self._stop_btn.setVisible(True)
         self.stream_needed.emit(True)   # start radar streaming for this session
@@ -891,7 +893,7 @@ class VexAimTab(QtWidgets.QWidget):
         self._pred_gesture.setText(best.replace("_", " "))
         self._pred_conf.setText(f"Confidence: {conf:.0%}")
 
-        cmd_text = "—"
+        cmd_text = "none"
         if self._robot is not None and conf >= threshold:
             try:
                 cmd_text = _apply_gesture(self._robot, best)

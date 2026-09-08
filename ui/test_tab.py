@@ -189,7 +189,7 @@ def _frames_to_pil(frames):
     Requires at least 10 frames; uses the last EPOCH_FRAMES (30) if more given.
     """
     from PIL import Image
-    from core.processing import EPOCH_FRAMES, epoch_spectrogram_db
+    from core.processing import EPOCH_FRAMES, epoch_spectrogram_db, image_rows
 
     if len(frames) < 10:
         return None
@@ -208,7 +208,9 @@ def _frames_to_pil(frames):
         smoothed   = gaussian_filter(spect_db, sigma=[1.0, 0.5])
         clipped    = np.clip(smoothed, DB_MIN, DB_MAX)
         normalized = (clipped - DB_MIN) / (DB_MAX - DB_MIN)
-        colored    = np.ascontiguousarray(_apply_jet(normalized)[::-1])
+        # Same row order the Collect tab saved with, or the model sees its
+        # training images upside down.
+        colored    = image_rows(_apply_jet(normalized))
         return Image.fromarray(colored, "RGB").resize((224, 224), Image.BILINEAR)
     except Exception:
         return None
@@ -293,7 +295,7 @@ class InferenceWorker(QtCore.QObject):
                 # Common on Windows when the CUDA PyTorch build is installed on a
                 # device without an NVIDIA GPU (c10.dll / torch_cuda.dll missing).
                 self.error.emit(
-                    "PyTorch could not load — a required DLL is missing.\n\n"
+                    "PyTorch could not load. A required DLL is missing.\n\n"
                     "Fix: run  setup_windows.bat  to install the CPU-only build of "
                     "PyTorch, which works on all Windows devices.\n\n"
                     f"(Technical detail: {ie})"
@@ -561,7 +563,7 @@ class ConfidenceBarsWidget(QtWidgets.QWidget):
                 font.setPixelSize(13)
                 p.setFont(font)
                 p.drawText(self.rect(), QtCore.Qt.AlignmentFlag.AlignCenter,
-                           "No prediction yet — do a gesture!")
+                           "No prediction yet. Do a gesture!")
                 return
 
             p = QtGui.QPainter(self)
@@ -744,7 +746,7 @@ class MazeWidget(QtWidgets.QWidget):
                 return f"Moved {_LABEL[self._facing].split()[0]}! Keep going!"
 
         elif gesture == "idle":
-            return "Idle — no move made. Do a swipe or push!"
+            return "Idle. No move made. Do a swipe or push!"
 
         else:
             return f"Unknown gesture: {gesture}"
@@ -905,7 +907,7 @@ class MazeWidget(QtWidgets.QWidget):
                 p.setFont(mfnt)
                 p.drawText(QtCore.QRectF(ox, oy + grid_h * 0.70, grid_w, grid_h * 0.30),
                            QtCore.Qt.AlignmentFlag.AlignCenter,
-                           f"{self._moves} moves — press Reset for a new maze!")
+                           f"{self._moves} moves. Press Reset for a new maze!")
 
             # ── Stop / Go / Reading corner badge (drawn last, on top) ──────────
             if self._overlay and not self._won:
@@ -1142,12 +1144,12 @@ class TestTab(QtWidgets.QWidget):
         layout.addStretch()
 
         layout.addWidget(HintCard([
-            "🎯 Single Prediction: do a gesture, hit Capture — the model tells you what it thinks!",
+            "🎯 Single Prediction: do a gesture, hit Capture, and the model tells you what it thinks!",
             "⚽ RoboSoccer mode: the model watches you continuously. Swipe to steer, push to speed up!",
             "🌀 Maze Game: navigate through the maze using gestures. Swipe to turn, push to move forward!",
             "📊 Confidence: a percentage showing how sure the model is. 90%+ means very confident!",
             "🔧 Confidence threshold: the robot only reacts if the model is at least this confident.",
-            "📈 The bar chart shows every gesture's score — one tall bar means confident!",
+            "📈 The bar chart shows every gesture's score. One tall bar means confident!",
             "🔁 Getting wrong predictions? Go back to Collect, add more samples, then retrain!",
         ]))
 
@@ -1644,7 +1646,7 @@ class TestTab(QtWidgets.QWidget):
         self._capture_btn.setEnabled(True)
         self._rs_start_btn.setEnabled(True)
         self._maze_start_btn.setEnabled(True)
-        self._set_status(f"✅ Loaded — {len(id2label)} classes ready!", "#27ae60")
+        self._set_status(f"✅ Loaded: {len(id2label)} classes ready!", "#27ae60")
         self._field.reset()
         self._rebuild_confirm_buttons(classes)
         self._confirm_widget.setVisible(False)
@@ -1681,7 +1683,7 @@ class TestTab(QtWidgets.QWidget):
         frames = list(self._capture_frames)
         if len(frames) < 5:
             self._capture_btn.setEnabled(True)
-            self._set_status("⚠️ No radar frames — is the radar connected?", "#c0392b")
+            self._set_status("⚠️ No radar frames. Is the radar connected?", "#c0392b")
             self.stream_needed.emit(False)   # abort — nothing to infer
             return
         self._set_status("🔍 Running inference…", "#e67e22")
@@ -1701,7 +1703,7 @@ class TestTab(QtWidgets.QWidget):
         self._last_infer_done = 0.0
         self._rs_start_btn.setVisible(False)
         self._rs_stop_btn.setVisible(True)
-        self._set_status("⚽ RoboSoccer running — do gestures to steer!", "#27ae60")
+        self._set_status("⚽ RoboSoccer running. Do gestures to steer!", "#27ae60")
         self.stream_needed.emit(True)   # start radar streaming for this game
         self._gesture_bar.show_ready()  # start with the window open
         self._field.set_overlay("go")   # show GO badge on the field
@@ -1810,7 +1812,7 @@ class TestTab(QtWidgets.QWidget):
         self._last_infer_done = 0.0
         self._maze_start_btn.setVisible(False)
         self._maze_stop_btn.setVisible(True)
-        self._set_status("Maze running — do a gesture to move!", "#8e44ad")
+        self._set_status("Maze running. Do a gesture to move!", "#8e44ad")
         self.stream_needed.emit(True)    # start radar streaming for this game
         self._gesture_bar.show_ready()   # start with the window open
         self._maze_widget.set_overlay("go")  # show GO badge on the maze
@@ -2032,7 +2034,7 @@ class TestTab(QtWidgets.QWidget):
                 feedback = self._maze_widget.apply_gesture(best)
                 self._update_facing_label()
                 color = "#27ae60" if "wall" not in feedback.lower() else "#e74c3c"
-                self._set_status(f"{nice} ({conf:.0%}) — {feedback}", color)
+                self._set_status(f"{nice} ({conf:.0%})  ·  {feedback}", color)
                 # Cooldown so we don't re-classify immediately after a gesture
                 self._maze_cooldown_ticks = 90    # ~3 s at 30 fps
                 self._frame_buf.clear()           # discard stale frames so they can't re-fire

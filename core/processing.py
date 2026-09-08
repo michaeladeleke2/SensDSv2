@@ -600,6 +600,49 @@ def method_max_velocity(method: str | None = None) -> float:
     return RDM_MAX_SPEED_M_S if (method or _METHOD) == METHOD_INFINEON else MAX_VELOCITY
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# Image row order — shared by saved samples and live inference
+# ══════════════════════════════════════════════════════════════════════════════
+#
+# A dB spectrogram leaves fftshift with row 0 at the most negative velocity.
+# Images are drawn top row first, so the rows are reversed to put positive
+# velocity at the top: motion toward the radar sits above the center line.
+# That is the orientation SensDS has always saved and trained on.
+#
+# The reference script draws with origin="upper" instead, leaving the negative
+# end at the top. set_image_velocity_flipped(True) saves images that sit the
+# same way up as it.
+#
+# The flip is cosmetic to the model — a network trained on flipped images and
+# fed flipped images does exactly as well. What is NOT safe is mixing the two
+# in one dataset: a vertical flip swaps toward for away, so approaching and
+# receding gestures stop being separable. Collection, live inference and the
+# previews therefore all reorder rows through image_rows(), so training images
+# and inference images can never end up different ways up.
+
+_IMAGE_VELOCITY_FLIPPED = False
+
+
+def set_image_velocity_flipped(flipped: bool):
+    """Choose which velocity sign sits at the top of every saved/inferred image."""
+    global _IMAGE_VELOCITY_FLIPPED
+    _IMAGE_VELOCITY_FLIPPED = bool(flipped)
+
+
+def get_image_velocity_flipped() -> bool:
+    return _IMAGE_VELOCITY_FLIPPED
+
+
+def image_rows(arr: np.ndarray) -> np.ndarray:
+    """
+    Reorder a spectrogram's rows for drawing as an image, top row first.
+
+    Takes the (freq_bins, n_cols) dB array or the (freq_bins, n_cols, 3) colored
+    one — the flip is over axis 0 either way.
+    """
+    return np.ascontiguousarray(arr if _IMAGE_VELOCITY_FLIPPED else arr[::-1])
+
+
 def epoch_spectrogram_db(frames: np.ndarray,
                          method: str | None = None) -> np.ndarray:
     """

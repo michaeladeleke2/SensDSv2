@@ -23,7 +23,7 @@ class GestureWindowBar(QtWidgets.QFrame):
             "border": "#27ae60",
             "fg":     "#2ecc71",
             "icon":   "🟢",
-            "text":   "Gesture window open — do a gesture now!",
+            "text":   "Gesture window open. Do a gesture now!",
         },
         "reading": {
             "bg":     "#1a2a45",
@@ -37,7 +37,7 @@ class GestureWindowBar(QtWidgets.QFrame):
             "border": "#e67e22",
             "fg":     "#f39c12",
             "icon":   "🟠",
-            "text":   "Wait — next window opens in",
+            "text":   "Wait. Next window opens in",
         },
     }
 

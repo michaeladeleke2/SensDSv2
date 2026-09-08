@@ -295,8 +295,9 @@ class VisualizeTab(QtWidgets.QWidget):
             "toward the radar therefore shows as negative there.\n\n"
             "This app draws bin 0 at the bottom, which agrees with its axis.\n"
             "Turn this on to sit the same way up as the reference for a\n"
-            "side-by-side comparison. Display only: the data and every\n"
-            "measurement are unchanged."
+            "side-by-side comparison. This live view only: the data, every\n"
+            "measurement and the saved samples are unchanged. To change how\n"
+            "samples are saved, use the Collect tab's own flip."
         )
         self._flip_check.toggled.connect(self._on_flip_toggled)
         layout.addWidget(self._flip_check)

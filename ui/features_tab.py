@@ -355,7 +355,7 @@ class FeaturesTab(QtWidgets.QWidget):
         layout.addWidget(self._divider())
 
         self._detail_hint = QtWidgets.QLabel(
-            "Click any point on the plot to see the recording it came from — "
+            "Click any point on the plot to see the recording it came from: "
             "its spectrogram picture and all of its measurements."
         )
         self._detail_hint.setObjectName("note")
@@ -398,7 +398,7 @@ class FeaturesTab(QtWidgets.QWidget):
             name = QtWidgets.QLabel(label)
             name.setObjectName("feat_name")
             name.setWordWrap(True)
-            value = QtWidgets.QLabel("—")
+            value = QtWidgets.QLabel("")
             value.setObjectName("feat_val")
             value.setAlignment(
                 QtCore.Qt.AlignmentFlag.AlignRight

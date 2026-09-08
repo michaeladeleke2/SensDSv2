@@ -380,7 +380,7 @@ class ResultsTab(QtWidgets.QWidget):
 
         ok = confidence >= threshold
         center = QtCore.Qt.AlignmentFlag.AlignCenter
-        actual_text = actual.replace("_", " ") if actual else "—"
+        actual_text = actual.replace("_", " ") if actual else "not recorded"
 
         source_colors = {
             "Single":     "#8e44ad",
@@ -406,7 +406,7 @@ class ResultsTab(QtWidgets.QWidget):
         n = len(self._history)
         above = sum(1 for _, _, c, t, _, _ in self._history if c >= t)
         self._summary_lbl.setText(
-            f"{n} prediction{'s' if n != 1 else ''}  —  "
+            f"{n} prediction{'s' if n != 1 else ''}  ·  "
             f"{above} confident  ({above / n:.0%})"
         )
 
@@ -486,13 +486,13 @@ class ResultsTab(QtWidgets.QWidget):
         hint_layout.addWidget(HintCard([
             "Confusion matrix: each box shows how many times the model guessed "
             "that column's gesture when you actually did the row's gesture. "
-            "Dark diagonal = great — it means the model got it right!",
+            "Dark diagonal = great. It means the model got it right!",
             "Accuracy per gesture: how often the model was correct for each move. "
             "If 'push' is low, try collecting more push samples and retraining.",
-            "Confidence: the model gives every gesture a score from 0–100%. "
+            "Confidence: the model gives every gesture a score from 0 to 100%. "
             "A high score (green ✓) means it's sure. Low (orange ⚠) means it's guessing.",
             "Threshold: you set the minimum confidence before an action happens. "
-            "60% is a safe starting point — lower it if the robot feels unresponsive.",
+            "60% is a safe starting point. Lower it if the robot feels unresponsive.",
             "Export CSV saves the full prediction log as a spreadsheet "
             "you can open in Excel or Google Sheets.",
             "The diagonal of the confusion matrix should be the darkest column. "

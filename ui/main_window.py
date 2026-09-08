@@ -21,7 +21,7 @@ HINTS = [
     "Try waving your hand slowly toward the sensor.",
     "A fast swipe left or right creates a diagonal streak.",
     "Pushing your hand forward produces a strong positive velocity burst.",
-    "Hold still — notice how the display stays flat at 0 m/s.",
+    "Hold still and notice how the display stays flat at 0 m/s.",
     "Positive velocity = moving toward the radar. Negative = moving away.",
 ]
 
@@ -328,7 +328,7 @@ class PlaceholderTab(QtWidgets.QWidget):
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("SensDSv2 — Sensing for Data Science")
+        self.setWindowTitle("SensDSv2: Sensing for Data Science")
         self.setWindowIcon(QtGui.QIcon(resource_path("assets/SensDSLogo.png")))
         self.setMinimumSize(860, 540)
         screen = QtGui.QGuiApplication.primaryScreen()
@@ -475,7 +475,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self._resources_tab = PlaceholderTab(
             "Resources",
-            "Reference materials, gesture guides, and project documentation — coming soon.",
+            "Reference materials, gesture guides, and project documentation. Coming soon.",
             "📚"
         )
         self._tabs.addTab(self._resources_tab, "📚   Resources")
@@ -547,7 +547,7 @@ class MainWindow(QtWidgets.QMainWindow):
             return
 
         self._show_soft_lock(
-            "Complete the previous steps first — this tab will unlock as you progress."
+            "Complete the previous steps first. This tab will unlock as you progress."
         )
 
     def _on_spect_method_changed(self, method: str):

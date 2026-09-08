@@ -1,9 +1,14 @@
+import json
 import os
 import time
 import numpy as np
 from PyQt6 import QtWidgets, QtCore, QtGui
 from scipy.ndimage import gaussian_filter
-from core.processing import epoch_spectrogram_db, method_max_velocity
+from core.processing import (
+    METHOD_INFINEON, METHOD_STFT, epoch_spectrogram_db,
+    get_image_velocity_flipped, get_method, image_rows, method_max_velocity,
+    set_image_velocity_flipped, set_method,
+)
 from ui import app_colors, HintCard, _scrollable_left
 from ui.spectrogram_widget import (
     DB_MIN, DB_MAX, FREQ_BINS, MAX_VELOCITY, FRAME_TIME_S, make_jet_colormap,
@@ -20,6 +25,63 @@ def _is_sample_file(fname: str) -> bool:
     Only the first counts as "a sample" — counting every .npy would double it.
     """
     return fname.endswith(".npy") and not fname.endswith("_raw.npy")
+
+
+# Records how a folder's samples were made, so a later session can tell whether
+# it is about to add images that do not match the ones already there.
+CAPTURE_INFO = "capture_info.json"
+
+
+def read_capture_info(folder: str) -> dict | None:
+    try:
+        with open(os.path.join(folder, CAPTURE_INFO)) as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def write_capture_info(folder: str, method: str, flipped: bool):
+    try:
+        with open(os.path.join(folder, CAPTURE_INFO), "w") as f:
+            json.dump({
+                "spectrogram_method": method,
+                "velocity_flipped": bool(flipped),
+                "updated": time.strftime("%Y-%m-%d %H:%M:%S"),
+            }, f, indent=2)
+    except Exception:
+        # Never let bookkeeping lose a capture.
+        pass
+
+
+def capture_mismatch(folder: str, method: str, flipped: bool) -> str:
+    """
+    Describe how the current settings differ from the samples already in a
+    folder, or "" when they agree (or the folder is new).
+
+    Mixing orientations in one dataset is the damaging case: a vertical flip
+    swaps toward for away, so approaching and receding gestures stop being
+    separable. Mixing methods is just as bad — the two produce different image
+    shapes and different features.
+    """
+    if not os.path.isdir(folder):
+        return ""
+    if not any(_is_sample_file(f) for f in os.listdir(folder)):
+        return ""
+    info = read_capture_info(folder)
+    if info is None:
+        return ("This folder has samples from before SensDS recorded these "
+                "settings. If they were collected differently, the mix will "
+                "confuse the model.")
+    diffs = []
+    if info.get("spectrogram_method") != method:
+        diffs.append(f"method was {info.get('spectrogram_method')}")
+    if bool(info.get("velocity_flipped")) != bool(flipped):
+        diffs.append("velocity axis was the other way up")
+    if not diffs:
+        return ""
+    return ("Existing samples here do not match: " + ", ".join(diffs) +
+            ". Delete them or switch back, or the model will be trained on "
+            "two different kinds of picture.")
 
 
 def _apply_jet_colormap(normalized):
@@ -143,6 +205,20 @@ def _collect_style(c: dict) -> str:
         font-size: 12px;
         color: {c['faint']};
     }}
+    QLabel#capture_note {{
+        font-size: 11px;
+        color: {c['faint']};
+    }}
+    QLabel#capture_warn {{
+        font-size: 11px;
+        color: #e67e22;
+        font-weight: bold;
+    }}
+    QCheckBox {{
+        font-size: 12px;
+        color: {c['text']};
+        spacing: 6px;
+    }}
 """
 
 
@@ -232,6 +308,7 @@ class CollectTab(QtWidgets.QWidget):
         self._total_samples = 0
         self._save_dir = ""
         self._setup_ui()
+        self._sync_capture_controls()
 
     def _setup_ui(self):
         outer = QtWidgets.QHBoxLayout(self)
@@ -306,6 +383,48 @@ class CollectTab(QtWidgets.QWidget):
 
         layout.addWidget(self._divider())
 
+        # ── how the saved pictures are made ──────────────────────────────────
+        layout.addWidget(self._lbl("Saved Spectrograms"))
+
+        self._method_combo = QtWidgets.QComboBox()
+        self._method_combo.addItem("STFT", METHOD_STFT)
+        self._method_combo.setItemData(
+            0, "1024 bins x 2 columns per frame, MTI filtered.\n"
+               "What the current saved models were trained on.",
+            QtCore.Qt.ItemDataRole.ToolTipRole)
+        self._method_combo.addItem("Infineon SDK", METHOD_INFINEON)
+        self._method_combo.setItemData(
+            1, "512 bins x 1 column per frame, with the hand's range tracked.\n"
+               "The method the reference script uses.",
+            QtCore.Qt.ItemDataRole.ToolTipRole)
+        self._method_combo.currentIndexChanged.connect(self._on_capture_setting)
+        layout.addWidget(self._method_combo)
+
+        self._flip_check = QtWidgets.QCheckBox("Flip velocity axis")
+        self._flip_check.setToolTip(
+            "Off: motion toward the radar is drawn above the center line.\n"
+            "On: drawn below it, the way the reference script draws it.\n\n"
+            "The model does equally well either way, as long as every sample\n"
+            "in the dataset is the same way up. Do not flip halfway through:\n"
+            "a vertical flip swaps toward for away, so a push and a pull stop\n"
+            "being tellable apart."
+        )
+        self._flip_check.toggled.connect(self._on_capture_setting)
+        layout.addWidget(self._flip_check)
+
+        self._capture_note = QtWidgets.QLabel("")
+        self._capture_note.setObjectName("capture_note")
+        self._capture_note.setWordWrap(True)
+        layout.addWidget(self._capture_note)
+
+        self._capture_warn = QtWidgets.QLabel("")
+        self._capture_warn.setObjectName("capture_warn")
+        self._capture_warn.setWordWrap(True)
+        self._capture_warn.setVisible(False)
+        layout.addWidget(self._capture_warn)
+
+        layout.addWidget(self._divider())
+
         # --- Gesture counts card ---
         self._counts_frame = QtWidgets.QFrame()
         self._counts_frame.setStyleSheet(
@@ -338,12 +457,16 @@ class CollectTab(QtWidgets.QWidget):
 
         # Refresh counts whenever the name field changes
         self._name_input.textChanged.connect(self._refresh_counts)
+        # The gesture picks the folder, so it decides which existing samples
+        # the current settings are compared against.
+        self._gesture_combo.currentTextChanged.connect(
+            self._refresh_capture_warning)
 
         layout.addWidget(self._divider())
 
         layout.addWidget(HintCard([
-            "Type your name and pick a gesture, then hit Start — "
-            "the radar will count down before each recording.",
+            "Type your name and pick a gesture, then hit Start. "
+            "The radar will count down before each recording.",
             "Do the same move every time: same speed, same hand height, "
             "same distance from the sensor. Repetition = better data.",
             "Aim for at least 25 samples per gesture. "
@@ -351,9 +474,9 @@ class CollectTab(QtWidgets.QWidget):
             "The delay timer between samples gives you a moment "
             "to reset before the next countdown.",
             "Each recording is automatically saved. "
-            "Come back later and add more — it picks up where you left off.",
-            "Have a few different people record data too — "
-            "the model will work better for everyone, not just you.",
+            "Come back later and add more; it picks up where you left off.",
+            "Have a few different people record data too. "
+            "The model will work better for everyone, not just you.",
         ], c=self._c))
 
         self._progress_bar = QtWidgets.QProgressBar()
@@ -466,7 +589,63 @@ class CollectTab(QtWidgets.QWidget):
         line.setStyleSheet("color: #eee; margin: 2px 0;")
         return line
 
+    # ── how captures are saved ───────────────────────────────────────────────
+
+    def showEvent(self, event):
+        # The Visualize tab writes the same method setting, so re-read it here
+        # rather than trusting whatever this combo was last left on.
+        super().showEvent(event)
+        self._sync_capture_controls()
+
+    def _sync_capture_controls(self):
+        method = get_method()
+        idx = self._method_combo.findData(method)
+        self._method_combo.blockSignals(True)
+        if idx >= 0:
+            self._method_combo.setCurrentIndex(idx)
+        self._method_combo.blockSignals(False)
+
+        self._flip_check.blockSignals(True)
+        self._flip_check.setChecked(get_image_velocity_flipped())
+        self._flip_check.blockSignals(False)
+
+        self._update_capture_note()
+
+    def _on_capture_setting(self):
+        set_method(self._method_combo.currentData())
+        set_image_velocity_flipped(self._flip_check.isChecked())
+        self._update_capture_note()
+        self._refresh_counts()
+
+    def _update_capture_note(self):
+        toward = "below" if self._flip_check.isChecked() else "above"
+        self._capture_note.setText(
+            f"Saved as {self._method_combo.currentText()}, with motion toward "
+            f"the radar {toward} the center line. The Test tab reads live "
+            f"gestures the same way."
+        )
+
+    def _capture_dir(self):
+        """The folder the next capture would write to, or "" if incomplete."""
+        name = self._name_input.text().strip()
+        label = self._gesture_combo.currentText().strip()
+        if not name or not label:
+            return ""
+        return os.path.join(os.path.expanduser("~"), "SensDSv2_data", name, label)
+
+    def _refresh_capture_warning(self):
+        folder = self._capture_dir()
+        msg = capture_mismatch(
+            folder, self._method_combo.currentData(),
+            self._flip_check.isChecked()) if folder else ""
+        self._capture_warn.setText(f"⚠  {msg}" if msg else "")
+        self._capture_warn.setVisible(bool(msg))
+
     def _refresh_counts(self):
+        # Runs first: _refresh_counts returns early in several places, and the
+        # mismatch warning has to be right whichever way it leaves.
+        self._refresh_capture_warning()
+
         name = self._name_input.text().strip()
         base_dir = os.path.join(os.path.expanduser("~"), "SensDSv2_data")
 
@@ -482,7 +661,7 @@ class CollectTab(QtWidgets.QWidget):
             self._counts_empty_lbl.setVisible(True)
             return
 
-        self._counts_title.setText(f"Samples on disk  —  {name}")
+        self._counts_title.setText(f"Samples on disk:  {name}")
         student_dir = os.path.join(base_dir, name)
 
         gestures = {}
@@ -540,6 +719,22 @@ class CollectTab(QtWidgets.QWidget):
         self._save_dir = os.path.join(
             os.path.expanduser("~"), "SensDSv2_data", name, label
         )
+
+        # Adding samples that do not match the ones already in the folder is
+        # the one mistake here that quietly ruins a dataset, so ask first.
+        mismatch = capture_mismatch(
+            self._save_dir, get_method(), get_image_velocity_flipped())
+        if mismatch:
+            answer = QtWidgets.QMessageBox.question(
+                self, "Settings Do Not Match",
+                f"{mismatch}\n\nCollect anyway?",
+                QtWidgets.QMessageBox.StandardButton.Yes
+                | QtWidgets.QMessageBox.StandardButton.No,
+                QtWidgets.QMessageBox.StandardButton.No,
+            )
+            if answer != QtWidgets.QMessageBox.StandardButton.Yes:
+                return
+
         os.makedirs(self._save_dir, exist_ok=True)
 
         # Continue numbering from where we left off instead of restarting at 0.
@@ -621,14 +816,15 @@ class CollectTab(QtWidgets.QWidget):
         # active method (1024 for STFT, 512 for Infineon SDK), so read it off
         # the array rather than assuming the module constant.
         # We want: width = n_cols (time), height = freq_bins (velocity)
-        # Flip vertically so positive velocity is at the top of the image.
+        # image_rows() puts the chosen velocity sign at the top and is the same
+        # call the Test tab makes, so training and inference always agree.
         freq_bins = display.shape[0]
         normalized = (display - DB_MIN) / (DB_MAX - DB_MIN)
         colored = _apply_jet_colormap(normalized)           # (freq_bins, n_cols, 3)
-        colored_flipped = np.ascontiguousarray(colored[::-1])  # positive vel → top
-        n_cols = colored_flipped.shape[1]
+        colored_rows = image_rows(colored)
+        n_cols = colored_rows.shape[1]
         img_raw = QtGui.QImage(
-            colored_flipped.tobytes(),
+            colored_rows.tobytes(),
             n_cols,
             freq_bins,
             n_cols * 3,
@@ -645,6 +841,10 @@ class CollectTab(QtWidgets.QWidget):
         )
         img_save.save(png_path)
 
+        # --- Record how this folder was captured ---
+        write_capture_info(self._save_dir, get_method(),
+                           get_image_velocity_flipped())
+
         # --- Update preview plot ---
         # Compute the actual gesture duration from the number of radar frames.
         duration = n_frames * FRAME_TIME_S
@@ -652,6 +852,10 @@ class CollectTab(QtWidgets.QWidget):
         time_scale = duration / n_cols_display
         max_vel = method_max_velocity()
         vel_scale = (2 * max_vel) / freq_bins
+        # Mirror the preview too, so what is on screen is what was written to
+        # disk. Negating the scale flips the rows and leaves the axis alone.
+        if get_image_velocity_flipped():
+            vel_scale = -vel_scale
 
         self._preview_img.setTransform(
             QtGui.QTransform().scale(time_scale, vel_scale).translate(0, -freq_bins / 2)
@@ -668,8 +872,8 @@ class CollectTab(QtWidgets.QWidget):
         gesture_label = self._gesture_combo.currentText().strip()
         raw_shape = "x".join(str(d) for d in raw_cube.shape)
         self._sample_count.setText(
-            f"#{self._samples_collected} saved  —  {total_in_folder} total for "
-            f"'{gesture_label}'  —  raw {raw_shape} {raw_cube.dtype}"
+            f"#{self._samples_collected} saved  ·  {total_in_folder} total for "
+            f"'{gesture_label}'  ·  raw {raw_shape} {raw_cube.dtype}"
         )
         self._status_msg.setText(f"✓ Sample {self._samples_collected} saved.")
         self._status_msg.setStyleSheet(

@@ -321,7 +321,7 @@ class TrainWorker(QtCore.QObject):
                 from torch.utils.data import Dataset
             except ImportError as ie:
                 self.error.emit(
-                    "PyTorch could not load — a required DLL is missing.\n\n"
+                    "PyTorch could not load. A required DLL is missing.\n\n"
                     "Fix: run  setup_windows.bat  to install the CPU-only build of "
                     "PyTorch, which works on all Windows devices without a GPU.\n\n"
                     f"(Technical detail: {ie})"
@@ -345,7 +345,7 @@ class TrainWorker(QtCore.QObject):
             model_src, model_label = _resolve_model(self._model_id)
             if model_src == self._model_id:
                 self.log.emit(
-                    f"⚠  No local copy of {self._model_id} found — "
+                    f"⚠  No local copy of {self._model_id} found. "
                     "attempting HuggingFace download.\n"
                     "   Connect to the internet or click 'Download Model' first."
                 )
@@ -375,7 +375,7 @@ class TrainWorker(QtCore.QObject):
 
             if len(all_subjects) < 2:
                 train_subj, val_subj = all_subjects, all_subjects
-                self.log.emit("Single subject — using random 80/20 split.")
+                self.log.emit("Single subject. Using random 80/20 split.")
             else:
                 rng = np.random.default_rng(self._seed)
                 arr = np.array(all_subjects)
@@ -469,7 +469,7 @@ class TrainWorker(QtCore.QObject):
                 raise ValueError(
                     f"{which} set is empty.\n\n"
                     f"{which} subjects: {subj}\n"
-                    f"Samples per student — {counts}\n\n"
+                    f"Samples per student: {counts}\n\n"
                     f"Each student folder needs gesture sub-folders with PNGs:\n"
                     f"    {DATA_ROOT}/<student>/<gesture>/*.png\n"
                     f"If a student has no samples, untick them under "
@@ -556,7 +556,7 @@ class TrainWorker(QtCore.QObject):
                         acc  = metrics.get("eval_accuracy", 0.0)
                         f1   = metrics.get("eval_f1_macro", 0.0)
                         msg = (
-                            f"Epoch {epoch}/{worker_self._epochs} — "
+                            f"Epoch {epoch}/{worker_self._epochs}  ·  "
                             f"val_loss: {loss:.4f}  acc: {acc:.2%}  f1: {f1:.3f}"
                             f"  [{_fmt_dur(epoch_s)}]"
                         )
@@ -631,7 +631,7 @@ class TrainWorker(QtCore.QObject):
             metrics = trainer.evaluate()
             acc = metrics.get("eval_accuracy", 0.0)
             f1  = metrics.get("eval_f1_macro", 0.0)
-            self.log.emit(f"Final — acc: {acc:.2%}  f1: {f1:.3f}")
+            self.log.emit(f"Final acc: {acc:.2%}  f1: {f1:.3f}")
 
             # --- Save HF model + processor + labels ---
             final_dir = out_path / "model"
@@ -739,7 +739,7 @@ class TrainTab(QtWidgets.QWidget):
         self._epochs.setValue(15)
         self._epochs.setToolTip(
             "An epoch is one full run through all your samples.\n"
-            "Think of it like rereading your notes before a test — the more\n"
+            "Think of it like rereading your notes before a test. The more\n"
             "times you review, the more the model remembers (up to a point).\n"
             "15 is a solid starting number for most gesture projects."
         )
@@ -754,7 +754,7 @@ class TrainTab(QtWidgets.QWidget):
         self._batch_size.setToolTip(
             "Batch size = how many samples the model studies at once\n"
             "before it adjusts itself. It's like grading 8 quizzes at a time\n"
-            "instead of one at a time — faster but uses more memory.\n"
+            "instead of one at a time. Faster, but uses more memory.\n"
             "Keep it at 8 for small datasets; increase it if you have 200+ samples."
         )
         row_batch.addWidget(self._batch_size)
@@ -784,7 +784,7 @@ class TrainTab(QtWidgets.QWidget):
         self._val_subjects.setToolTip(
             "Val subjects = how many students are kept secret from the model\n"
             "during training and used only for the final accuracy test.\n"
-            "It's like having a classmate quiz you on new questions — not\n"
+            "It's like having a classmate quiz you on new questions, not\n"
             "the ones you already practiced. Keeps the score fair and honest."
         )
         row_val.addWidget(self._val_subjects)
@@ -798,9 +798,9 @@ class TrainTab(QtWidgets.QWidget):
         self._model_size.addItem("Base (vit-base-patch16-224, more accurate)")
         self._model_size.setCurrentIndex(0)   # default: Small
         self._model_size.setToolTip(
-            "Small: ~22 M parameters — trains and runs significantly faster.\n"
+            "Small: ~22 M parameters. Trains and runs significantly faster.\n"
             "Recommended for Surface Pro and other CPU-only devices.\n\n"
-            "Base: ~86 M parameters — higher accuracy but slower to train.\n"
+            "Base: ~86 M parameters. Higher accuracy but slower to train.\n"
             "Use if you have a machine with a dedicated GPU or more time."
         )
         self._model_size.currentIndexChanged.connect(self._on_model_size_changed)
@@ -831,19 +831,19 @@ class TrainTab(QtWidgets.QWidget):
 
         layout.addWidget(HintCard([
             "Epochs: one full run through all your samples. "
-            "More = more practice for the model. Watch the chart — "
+            "More = more practice for the model. Watch the chart: "
             "if the orange line stops climbing, it's done learning.",
             "Batch size: how many samples the model sees at once before updating. "
             "8 is great for small datasets. Think of it like studying in groups of 8.",
             "Learning rate: how big a step the model takes when it makes a mistake. "
-            "0.00002 is the sweet spot — don't change it unless things go wrong.",
+            "0.00002 is the sweet spot. Don't change it unless things go wrong.",
             "Val subjects: classmates kept secret from the model during training. "
-            "Their data is used only to check if the model actually learned — not to cheat.",
+            "Their data is used only to check if the model actually learned, not to cheat.",
             "Green accuracy line rising = model is getting smarter. "
             "Orange F1 line is more trustworthy when you have unequal numbers of each gesture.",
-            "Training can take several minutes — let it run! "
+            "Training can take several minutes, so let it run! "
             "The chart updates after each epoch so you can watch progress live.",
-            "The model learns from spectrogram images — "
+            "The model learns from spectrogram images. "
             "it's basically learning to read radar pictures of your hand movements.",
         ], c=self._c))
 
@@ -1011,7 +1011,7 @@ class TrainTab(QtWidgets.QWidget):
             self._download_btn.setText("✓  Model ready")
         else:
             self._model_status.setObjectName("status_warn")
-            self._model_status.setText("⚠  Not downloaded — training requires internet without this")
+            self._model_status.setText("⚠  Not downloaded. Training requires internet without this")
             self._download_btn.setEnabled(True)
             self._download_btn.setText("⬇  Download Model (once)")
         self._model_status.style().unpolish(self._model_status)
@@ -1211,9 +1211,9 @@ class TrainTab(QtWidgets.QWidget):
         # Surface the latest values in the titles so exact numbers don't have
         # to be read off the axes.
         self._set_chart_title(
-            self._score_chart, f"Accuracy & F1   —   {acc:.1%}  /  {f1:.3f}"
+            self._score_chart, f"Accuracy & F1   ·   {acc:.1%}  /  {f1:.3f}"
         )
-        self._set_chart_title(self._loss_chart, f"Val Loss   —   {loss:.4f}")
+        self._set_chart_title(self._loss_chart, f"Val Loss   ·   {loss:.4f}")
 
     def _on_finished(self, model_path):
         self._cleanup_thread()
