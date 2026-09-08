@@ -376,11 +376,6 @@ class FeaturesTab(QtWidgets.QWidget):
         self._img_label.setWordWrap(True)
         body.addWidget(self._img_label)
 
-        self._img_caption = QtWidgets.QLabel("")
-        self._img_caption.setObjectName("hintmsg")
-        self._img_caption.setWordWrap(True)
-        body.addWidget(self._img_caption)
-
         self._detail_meta = QtWidgets.QLabel("")
         self._detail_meta.setObjectName("detail_meta")
         self._detail_meta.setWordWrap(True)
@@ -628,7 +623,6 @@ class FeaturesTab(QtWidgets.QWidget):
             self._img_label.setText(
                 "No spectrogram image was saved next to this recording."
             )
-            self._img_caption.setText("")
         else:
             self._img_label.setText("")
             self._img_label.setPixmap(pixmap.scaled(
@@ -636,11 +630,6 @@ class FeaturesTab(QtWidgets.QWidget):
                 QtCore.Qt.AspectRatioMode.KeepAspectRatio,
                 QtCore.Qt.TransformationMode.SmoothTransformation,
             ))
-            self._img_caption.setText(
-                "Time runs left to right. Velocity runs bottom to top with "
-                "zero in the middle, so motion toward the radar sits above "
-                "the center line. This is the picture the model is trained on."
-            )
 
         n_frames = len(record["series"]["time_s"])
         self._detail_meta.setText(
