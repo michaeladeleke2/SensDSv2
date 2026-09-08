@@ -71,7 +71,7 @@ VEX_STYLE = """
     QLabel#vex_model_lbl {
         font-size: 11px;
         color: #666666;
-        font-family: monospace;
+        font-family: Menlo, Consolas, 'DejaVu Sans Mono', 'Liberation Mono', monospace;
     }
     QRadioButton { font-size: 13px; color: #333333; }
     QDoubleSpinBox, QLineEdit {
@@ -118,7 +118,7 @@ VEX_STYLE = """
     QPlainTextEdit#vex_log {
         background: #0d1117;
         color: #39d353;
-        font-family: monospace;
+        font-family: Menlo, Consolas, 'DejaVu Sans Mono', 'Liberation Mono', monospace;
         font-size: 11px;
         border: 1px solid #333333;
         border-radius: 5px;
@@ -690,7 +690,7 @@ class VexAimTab(QtWidgets.QWidget):
             return
 
         self._model_lbl.setText("Loading…")
-        self._model_lbl.setStyleSheet("font-size: 11px; color: #e67e22; font-family: monospace;")
+        self._model_lbl.setStyleSheet("font-size: 11px; color: #e67e22; font-family: Menlo, Consolas, 'DejaVu Sans Mono', 'Liberation Mono', monospace;")
         self._load_btn.setEnabled(False)
         self._start_btn.setEnabled(False)
 
@@ -714,7 +714,7 @@ class VexAimTab(QtWidgets.QWidget):
         self._id2label     = id2label
         self._model_lbl.setText(f"✓  {name}")
         self._model_lbl.setStyleSheet(
-            "font-size: 11px; color: #27ae60; font-family: monospace;"
+            "font-size: 11px; color: #27ae60; font-family: Menlo, Consolas, 'DejaVu Sans Mono', 'Liberation Mono', monospace;"
         )
         self._log(
             f"✓ Model loaded: {name}  "
@@ -728,7 +728,7 @@ class VexAimTab(QtWidgets.QWidget):
         self._id2label     = {}
         self._model_lbl.setText(f"✗  {msg}")
         self._model_lbl.setStyleSheet(
-            "font-size: 11px; color: #c0392b; font-family: monospace;"
+            "font-size: 11px; color: #c0392b; font-family: Menlo, Consolas, 'DejaVu Sans Mono', 'Liberation Mono', monospace;"
         )
         self._log(f"❌ Model load failed: {msg}")
         self._start_btn.setEnabled(False)

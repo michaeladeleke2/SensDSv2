@@ -44,12 +44,12 @@ def _viz_style(c: dict) -> str:
     QLabel#param_name {{ font-size: 12px; color: {c['text']}; }}
     QLabel#param_value {{
         font-size: 12px; font-weight: bold; color: {c['accent']};
-        font-family: monospace;
+        font-family: Menlo, Consolas, 'DejaVu Sans Mono', 'Liberation Mono', monospace;
     }}
     QLabel#desc {{ font-size: 11px; color: {c['faint']}; }}
     QLabel#readout {{
         font-size: 11px; color: {c['subtext']};
-        font-family: monospace;
+        font-family: Menlo, Consolas, 'DejaVu Sans Mono', 'Liberation Mono', monospace;
         background: {c['bg']};
         border: 1px solid {c['border']};
         border-radius: 5px;

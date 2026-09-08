@@ -95,7 +95,7 @@ def _pca_style(c: dict) -> str:
     QLabel#caption {{
         font-size: 12px;
         color: {c['subtext']};
-        font-family: monospace;
+        font-family: Menlo, Consolas, 'DejaVu Sans Mono', 'Liberation Mono', monospace;
     }}
     QLabel#measures {{
         font-size: 11px;

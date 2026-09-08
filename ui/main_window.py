@@ -62,7 +62,7 @@ def _app_style(c: dict, compact: bool = False) -> str:
         font-size: {time_font};
         font-weight: bold;
         color: #ffffff;
-        font-family: monospace;
+        font-family: Menlo, Consolas, 'DejaVu Sans Mono', 'Liberation Mono', monospace;
     }}
     QLabel#hint_label {{
         font-size: {hint_font};

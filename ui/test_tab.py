@@ -83,7 +83,7 @@ TEST_STYLE = """
     QLabel#test_model_lbl {
         font-size: 12px;
         color: #666;
-        font-family: monospace;
+        font-family: Menlo, Consolas, 'DejaVu Sans Mono', 'Liberation Mono', monospace;
     }
     QDoubleSpinBox, QSpinBox {
         border: 1px solid #ccc;
@@ -1638,7 +1638,7 @@ class TestTab(QtWidgets.QWidget):
         self._id2label     = id2label
         self._model_lbl.setText(f"✓  {name}")
         self._model_lbl.setStyleSheet(
-            "font-size: 12px; color: #27ae60; font-family: monospace;"
+            "font-size: 12px; color: #27ae60; font-family: Menlo, Consolas, 'DejaVu Sans Mono', 'Liberation Mono', monospace;"
         )
         self._classes_lbl.setText("  ·  ".join(classes))
         self._classes_title.setText(f"Classes  ({len(classes)})")
@@ -1658,7 +1658,7 @@ class TestTab(QtWidgets.QWidget):
         self._id2label     = {}
         self._model_lbl.setText(f"✗  {msg}")
         self._model_lbl.setStyleSheet(
-            "font-size: 12px; color: #c0392b; font-family: monospace;"
+            "font-size: 12px; color: #c0392b; font-family: Menlo, Consolas, 'DejaVu Sans Mono', 'Liberation Mono', monospace;"
         )
         self._classes_frame.setVisible(False)
         self._capture_btn.setEnabled(False)

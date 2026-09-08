@@ -64,7 +64,7 @@ class GestureWindowBar(QtWidgets.QFrame):
             QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter
         )
         self._cd_lbl.setStyleSheet(
-            "font-size: 14px; font-family: monospace; font-weight: bold; border: none;"
+            "font-size: 14px; font-family: Menlo, Consolas, 'DejaVu Sans Mono', 'Liberation Mono', monospace; font-weight: bold; border: none;"
         )
         layout.addWidget(self._cd_lbl)
 
@@ -87,7 +87,7 @@ class GestureWindowBar(QtWidgets.QFrame):
         if state == "cooldown":
             self._cd_lbl.setText(f"{countdown_s:.1f}s")
             self._cd_lbl.setStyleSheet(
-                f"font-size: 14px; font-family: monospace; font-weight: bold; {color_css}"
+                f"font-size: 14px; font-family: Menlo, Consolas, 'DejaVu Sans Mono', 'Liberation Mono', monospace; font-weight: bold; {color_css}"
             )
         else:
             self._cd_lbl.setText("")

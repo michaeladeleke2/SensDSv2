@@ -34,6 +34,12 @@ except ImportError:
 
 
 def main():
+    # Before anything opens the radar: the Infineon SDK prints dropped-packet
+    # notices to stdout from C++, several a second, which buries everything
+    # else. This counts them and prints a summary instead. See core/sdk_log.py.
+    from core import sdk_log
+    sdk_log.install()
+
     app = QtWidgets.QApplication(sys.argv)
     app.setApplicationName("SensDSv2")
     window = MainWindow()

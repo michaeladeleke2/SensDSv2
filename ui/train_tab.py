@@ -97,7 +97,7 @@ def _train_style(c: dict) -> str:
     QPlainTextEdit {{
         background: {c['panel']};
         color: {c['text']};
-        font-family: monospace;
+        font-family: Menlo, Consolas, 'DejaVu Sans Mono', 'Liberation Mono', monospace;
         font-size: 12px;
         border: 1px solid {c['border']};
         border-radius: 6px;
@@ -876,7 +876,7 @@ class TrainTab(QtWidgets.QWidget):
         self._timer_lbl = QtWidgets.QLabel("")
         self._timer_lbl.setStyleSheet(
             f"font-size: 12px; font-weight: bold; color: {self._c['subtext']};"
-            " font-family: monospace;"
+            " font-family: Menlo, Consolas, 'DejaVu Sans Mono', 'Liberation Mono', monospace;"
         )
         hdr.addWidget(self._timer_lbl)
         layout.addLayout(hdr)
