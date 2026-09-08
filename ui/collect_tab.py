@@ -16,17 +16,6 @@ from ui.spectrogram_widget import (
 import pyqtgraph as pg
 
 
-# The preview spans a fixed window rather than the length of the capture, so a
-# 2 s gesture and a 5 s one are drawn at the same scale and a push always looks
-# the same width. 6 s matches the Visualize tab's default so the captured
-# gesture and the live stream read alike.
-PREVIEW_SECONDS = 6.0
-
-# Matches the reference view exactly: matplotlib's default 6.4 x 4.8 in figure
-# at 100 dpi, which is what core/doppler_spectrogram_live.py draws into.
-PREVIEW_SIZE_PX = (640, 480)
-
-
 def _is_sample_file(fname: str) -> bool:
     """
     True for the one file that represents a collected sample.
@@ -557,21 +546,9 @@ class CollectTab(QtWidgets.QWidget):
 
         # Start with empty range so axes look clean before first capture.
         self._preview_plot.setYRange(-MAX_VELOCITY, MAX_VELOCITY, padding=0)
-        self._preview_plot.setXRange(0, PREVIEW_SECONDS, padding=0)
+        self._preview_plot.setXRange(0, 3.0, padding=0)
 
-        # Sized and framed like the Visualize tab's reference view, so a
-        # captured gesture and the live stream can be compared by eye without
-        # allowing for a different scale. Maximum rather than fixed, so the
-        # plot still shrinks on a small screen instead of forcing a scrollbar,
-        # and stretches on both sides so it sits centred rather than pinned to
-        # the left when the window is wider than the plot.
-        self._preview_widget.setMaximumSize(*PREVIEW_SIZE_PX)
-        preview_row = QtWidgets.QHBoxLayout()
-        preview_row.setContentsMargins(0, 0, 0, 0)
-        preview_row.addStretch()
-        preview_row.addWidget(self._preview_widget, 1)
-        preview_row.addStretch()
-        layout.addLayout(preview_row, 1)
+        layout.addWidget(self._preview_widget, 1)   # fills all remaining vertical space
 
         bottom_row = QtWidgets.QHBoxLayout()
 
@@ -884,10 +861,7 @@ class CollectTab(QtWidgets.QWidget):
             QtGui.QTransform().scale(time_scale, vel_scale).translate(0, -freq_bins / 2)
         )
         self._preview_img.setImage(display.T, autoLevels=False)
-        # Fixed span, not the capture's own length: the transform above already
-        # places the data across its true 0..duration seconds, so a shorter
-        # gesture fills less of the axis instead of being stretched to fit.
-        self._preview_plot.setXRange(0, PREVIEW_SECONDS, padding=0)
+        self._preview_plot.setXRange(0, duration, padding=0)
         self._preview_plot.setYRange(-max_vel, max_vel, padding=0)
 
         self._refresh_counts()
