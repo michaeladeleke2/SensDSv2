@@ -519,6 +519,24 @@ RDM_DYNAMIC_RANGE_DB = 40.0
 # noise floor between gestures.
 RDM_VMAX_DECAY_DB = 0.2
 
+# Absolute floor, in dB, for the bottom of that peak-relative window.
+#
+# Peak-relative gain works while something is moving, but runs away when
+# nothing is. On a still scene the brightest thing in the frame is static
+# clutter sitting only ~20 dB above the receiver noise, so a window 40 dB below
+# the peak reaches well past the noise floor and paints it mid-scale: an idle
+# capture came out solid green instead of the empty blue chart it should be.
+#
+# Measured across 50 real captures (25 idle + 25 push, Infineon method):
+#   idle peak   -39.5 .. -38.1 dB     push peak   -7.4 .. +10.1 dB
+#   noise floor -59.6 .. -57.6 dB, indistinguishable between the two
+#
+# Every push sits more than 30 dB above every idle, and -50 dB falls inside
+# that gap: it clamps all 25 idle frames and leaves all 25 push frames
+# bit-identical, because a push's own peak - 40 is already above the floor.
+# Only a scene with nothing in it is affected, which is the whole point.
+RDM_DISPLAY_FLOOR_DB = -50.0
+
 _dynamic_range_db = RDM_DYNAMIC_RANGE_DB
 
 
@@ -555,8 +573,11 @@ def doppler_to_display_db(spec_db: np.ndarray,
     if vmax is None:
         vmax = float(np.nanmax(spec_db))
     rng = _dynamic_range_db if dynamic_range_db is None else max(5.0, dynamic_range_db)
-    vmin = vmax - rng
-    norm = np.clip((spec_db - vmin) / rng, 0.0, 1.0)
+    # The window bottom is clamped so a still scene cannot stretch its own
+    # noise up into mid-scale. See RDM_DISPLAY_FLOOR_DB.
+    vmin = max(vmax - rng, RDM_DISPLAY_FLOOR_DB)
+    span = max(vmax - vmin, 1e-6)
+    norm = np.clip((spec_db - vmin) / span, 0.0, 1.0)
     return (DB_MIN + norm * (DB_MAX - DB_MIN)).astype(np.float32)
 
 
