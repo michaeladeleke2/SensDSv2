@@ -1,76 +1,109 @@
 # -*- mode: python ; coding: utf-8 -*-
 #
 # PyInstaller spec — produces:
-#   macOS : SensDSv2.app  (one-file app bundle, via pyinstaller main.spec)
-#   Windows: dist/SensDSv2/ folder  (one-DIRECTORY build — fast startup, no temp extraction)
+#   Windows: dist/SensDSv2/ folder  (one-DIRECTORY build — fast startup)
+#   macOS  : dist/SensDSv2.app
 #
 # ── Build instructions ────────────────────────────────────────────────────────
 #
-#  macOS (dev machine):
-#    pip install -r requirements.txt
-#    pyinstaller main.spec
-#    → dist/SensDSv2.app
-#
-#  Windows (must be run ON a Windows machine or via GitHub Actions):
+#  Windows (must run ON Windows — PyInstaller cannot cross-compile):
 #    pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-#    pip install -r requirements.txt
+#    pip install -r requirements.txt pyinstaller
+#    pip install vendor\ifxradarsdk-*-win_amd64.whl     ← for live radar
 #    pyinstaller main.spec
-#    → dist/SensDSv2/          ← zip this entire folder and distribute
-#       SensDSv2.exe            ← students double-click this
-#       (+ hundreds of .dll files alongside it)
+#    → dist\SensDSv2\   ← zip this whole folder and distribute
 #
-#  DO NOT build for Windows on macOS — PyInstaller bundles are OS-specific.
-#  Use GitHub Actions (.github/workflows/build_windows.yml) to build automatically.
+#  macOS (dev machine):
+#    pip install -r requirements.txt && pyinstaller main.spec
 #
+#  See PACKAGING.md for hosting, USB distribution, and the radar SDK.
 # ─────────────────────────────────────────────────────────────────────────────
 
 import sys
-from PyInstaller.utils.hooks import collect_all, collect_data_files
+from pathlib import Path
 
-datas    = [('assets', 'assets')]
+from PyInstaller.utils.hooks import collect_all
+
+SPEC_DIR = Path(SPECPATH)
+
+datas = [('assets', 'assets')]
 binaries = []
 hiddenimports = []
 
-# ── PyQt6 ────────────────────────────────────────────────────────────────────
-tmp = collect_all('PyQt6')
-datas += tmp[0]; binaries += tmp[1]; hiddenimports += tmp[2]
 
-# ── Infineon Radar SDK (optional — skipped if not installed on build machine) ─
-try:
-    tmp = collect_all('ifxradarsdk')
-    datas += tmp[0]; binaries += tmp[1]; hiddenimports += tmp[2]
-    print("INFO: ifxradarsdk collected.")
-except Exception:
-    print("INFO: ifxradarsdk not found on this build machine.")
-    print("INFO: The built app will start and run normally, but radar streaming")
-    print("INFO: will not work.  To include radar support, run build_local.bat")
-    print("INFO: on a Windows machine that has the Infineon SDK installed.")
+def bundle(package, optional=False):
+    """collect_all a package, or say plainly why the build will be limited."""
+    try:
+        d, b, h = collect_all(package)
+    except Exception as exc:
+        if not optional:
+            raise
+        print(f"SPEC: {package} not installed — {exc}")
+        return False
+    datas.extend(d)
+    binaries.extend(b)
+    hiddenimports.extend(h)
+    print(f"SPEC: bundled {package} ({len(d)} data files, {len(b)} binaries)")
+    return True
 
-# ── PyTorch ───────────────────────────────────────────────────────────────────
-# torch is imported lazily inside worker threads so PyInstaller cannot detect
-# it automatically.  collect_all ensures all DLLs are bundled.
-# ALWAYS build Windows targets with CPU-only torch (no CUDA DLLs → no c10.dll error).
-tmp = collect_all('torch')
-datas += tmp[0]; binaries += tmp[1]; hiddenimports += tmp[2]
 
-tmp = collect_all('torchvision')
-datas += tmp[0]; binaries += tmp[1]; hiddenimports += tmp[2]
+# ── GUI stack ────────────────────────────────────────────────────────────────
+bundle('PyQt6')
+bundle('pyqtgraph')
 
-# ── HuggingFace Transformers ──────────────────────────────────────────────────
-tmp = collect_all('transformers')
-datas += tmp[0]; binaries += tmp[1]; hiddenimports += tmp[2]
-datas += collect_data_files('transformers')
+# matplotlib is not optional: core/doppler_spectrogram_live.py imports it at
+# module scope and the Visualize tab's reference view draws with it. It was
+# absent from earlier builds, so "Compare with reference view" failed in the
+# packaged app while working fine from source.
+bundle('matplotlib')
+
+# ── Machine learning ─────────────────────────────────────────────────────────
+# torch is imported lazily inside worker threads, so static analysis misses it.
+bundle('torch')
+bundle('torchvision')
+bundle('transformers')
+bundle('PIL')
+
+# ── Infineon Radar SDK ───────────────────────────────────────────────────────
+# Ships native libraries (.dll on Windows, .dylib on macOS) that must match the
+# build platform. A macOS wheel in a Windows build yields an app that starts but
+# can never open the radar.
+if not bundle('ifxradarsdk', optional=True):
+    print("SPEC: ==> live radar streaming will NOT work in this build.")
+    print("SPEC:     Install this platform's ifxradarsdk wheel and rebuild.")
+
+# ── VEX AIM robot ────────────────────────────────────────────────────────────
+# ui/vex_aim_tab.py does `from vex.aim import Robot` inside a method, so
+# PyInstaller never sees it. vex/settings.py then reads settings.json from
+# beside itself, so the JSON has to travel with the package.
+datas.append((str(SPEC_DIR / 'vex' / 'settings.json'), 'vex'))
+hiddenimports += [
+    'vex', 'vex.aim', 'vex.settings', 'vex.vex_globals',
+    'vex.vex_messages', 'vex.vex_types',
+    'websocket',                      # vex.aim's transport
+]
+
+# ── Base model for offline training ──────────────────────────────────────────
+# Optional. Populate models/ with `python tools/fetch_base_model.py` before
+# building and the app can train with no internet at all; without it the Train
+# tab has to reach HuggingFace once.
+models_dir = SPEC_DIR / 'models'
+if models_dir.is_dir() and any(models_dir.iterdir()):
+    datas.append((str(models_dir), 'models'))
+    print(f"SPEC: bundled base models: {[p.name for p in models_dir.iterdir()]}")
+else:
+    print("SPEC: no models/ directory — the Train tab will need internet once.")
 
 hiddenimports += [
     'transformers.models.auto',
     'transformers.models.vit',
     'transformers.models.convnext',
     'accelerate',
+    'huggingface_hub',
     'scipy.signal',
+    'scipy.signal.windows',
     'scipy.ndimage',
-    # Infineon SDK — imported lazily in core/radar.py so PyInstaller won't
-    # detect them via static analysis; list them explicitly so they're found
-    # when the SDK *is* present on the build machine.
+    'matplotlib.backends.backend_qtagg',
     'ifxradarsdk',
     'ifxradarsdk.fmcw',
     'ifxradarsdk.fmcw.types',
@@ -80,41 +113,45 @@ hiddenimports += [
 
 a = Analysis(
     ['main.py'],
-    pathex=[],
+    pathex=[str(SPEC_DIR)],
     binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    # Exclude CUDA sub-packages when using CPU-only torch — shrinks bundle significantly.
-    excludes=['torch.cuda', 'torchvision.models.detection'],
+    # NOTE: do NOT exclude torch.cuda. `import torch` imports it unconditionally
+    # even in the CPU-only build, so excluding it makes the packaged app die at
+    # startup with ModuleNotFoundError: No module named 'torch.cuda'. The
+    # CPU-only wheel is what actually keeps CUDA out of the bundle.
+    excludes=['tkinter'],
     noarchive=False,
     optimize=0,
 )
 pyz = PYZ(a.pure)
 
 # ── Windows: one-DIRECTORY build ──────────────────────────────────────────────
-# Distributing the dist/SensDSv2/ folder (zipped) is the correct Windows approach.
-# One-file mode would extract 1-2 GB of DLLs to a temp folder on every launch,
-# causing a 30-60 second black screen before the app opens.
+# One-file mode would unpack well over a gigabyte of DLLs into a temp folder on
+# every launch: a 30-60 second black screen before the window appears, every
+# time. The folder build starts immediately.
 if sys.platform == 'win32':
     exe = EXE(
         pyz,
         a.scripts,
-        [],        # ← binaries NOT packed into the exe
-        [],        # ← datas NOT packed into the exe
+        [],                     # binaries stay outside the exe
+        [],                     # datas stay outside the exe
+        exclude_binaries=True,
         name='SensDSv2',
         debug=False,
         bootloader_ignore_signals=False,
         strip=False,
-        # UPX compresses DLLs but BREAKS PyTorch DLLs on Windows — disable it.
+        # UPX corrupts PyTorch's DLLs on Windows — leave it off.
         upx=False,
         console=False,
         disable_windowed_traceback=False,
         argv_emulation=False,
         target_arch=None,
-        icon='assets/SensDSLogo.ico' if sys.platform == 'win32' else None,
+        icon='assets/SensDSLogo.ico',
     )
     coll = COLLECT(
         exe,
@@ -122,23 +159,22 @@ if sys.platform == 'win32':
         a.datas,
         strip=False,
         upx=False,
-        name='SensDSv2',    # → dist/SensDSv2/
+        name='SensDSv2',        # → dist/SensDSv2/
     )
 
-# ── macOS: one-file app bundle ────────────────────────────────────────────────
+# ── macOS: app bundle ─────────────────────────────────────────────────────────
 else:
     exe = EXE(
         pyz,
         a.scripts,
-        a.binaries,
-        a.datas,
         [],
+        [],
+        exclude_binaries=True,
         name='SensDSv2',
         debug=False,
         bootloader_ignore_signals=False,
         strip=False,
-        upx=True,
-        upx_exclude=['torch*.dylib', 'libtorch*.dylib'],
+        upx=False,
         console=False,
         disable_windowed_traceback=False,
         argv_emulation=False,
@@ -147,8 +183,16 @@ else:
         entitlements_file=None,
         icon='assets/SensDSLogo.icns',
     )
-    app = BUNDLE(
+    coll = COLLECT(
         exe,
+        a.binaries,
+        a.datas,
+        strip=False,
+        upx=False,
+        name='SensDSv2',
+    )
+    app = BUNDLE(
+        coll,
         name='SensDSv2.app',
         icon='assets/SensDSLogo.icns',
         bundle_identifier='edu.sensds.v2',

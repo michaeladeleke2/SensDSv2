@@ -1,5 +1,6 @@
 import os
 import glob
+import sys
 import time
 import datetime
 import numpy as np
@@ -129,10 +130,26 @@ _HERE = Path(__file__).resolve().parent
 _HF_MODEL_ID = _MODEL_OPTIONS[_DEFAULT_MODEL_KEY]
 
 
+def _app_dir() -> Path:
+    """
+    Directory the app's bundled resources sit in.
+
+    Running from source that is the repository root. Inside a PyInstaller
+    build the source lives in an archive and __file__ is synthetic, so the
+    only reliable anchor is _MEIPASS (dist/SensDSv2/_internal on Windows).
+    """
+    if getattr(sys, "frozen", False):
+        base = getattr(sys, "_MEIPASS", None)
+        if base:
+            return Path(base)
+        return Path(sys.executable).resolve().parent
+    return _HERE.parent
+
+
 def _model_local_dir(model_id: str) -> Path:
     """Return the local bundle path for a given HuggingFace model ID."""
     model_name = model_id.split("/")[-1]   # e.g. "vit-small-patch16-224"
-    return _HERE.parent / "models" / model_name
+    return _app_dir() / "models" / model_name
 
 
 def _hf_cache_snapshot(model_id: str) -> Path | None:

@@ -1,93 +1,109 @@
-name: Build Windows Executable (model-inference only — no live radar)
+name: Build Windows Executable
 #
-# This CI build does NOT include the Infineon Radar SDK because the SDK requires
-# a manual download from infineon.com and cannot be installed in a GitHub runner.
+# Produces dist/SensDSv2/ zipped, on a real Windows runner. PyInstaller cannot
+# cross-compile, so this is the only way to make a Windows build from a Mac.
 #
-# The resulting .exe fully supports:  loading models, testing gestures on
-#   pre-recorded data, training, results tab, VEX AIM with a pre-loaded model.
+# ── Live radar ────────────────────────────────────────────────────────────────
+# The Infineon SDK is not on PyPI and is not freely redistributable, so this
+# repository (which is public) must not contain the wheel. The job reads it from
+# a repository secret instead, base64-encoded:
 #
-# It does NOT support: clicking "Connect Radar" for live streaming.
+#     # on a machine holding the Windows wheel:
+#     base64 -i ifxradarsdk-3.6.4-py3-none-win_amd64.whl | pbcopy
+#     # GitHub -> Settings -> Secrets and variables -> Actions -> New secret
+#     #   name: IFXRADARSDK_WHEEL_B64
 #
-# For a build that includes live radar streaming, run build_local.bat on a
-# Windows machine that has the SDK installed (pip install ifxradarsdk-*.whl first).
+# With the secret set, the build supports live radar. Without it the build still
+# works for everything else and says so in the artifact name.
 #
-# Triggers:
-#   - Every push to main (fresh build after git push from your Mac)
-#   - Every version tag  (git tag v1.0 && git push --tags → GitHub Release)
-#   - Manual trigger from the Actions tab (Actions → this workflow → Run workflow)
+# Triggers: push to main, version tags (-> GitHub Release), and manual runs.
 on:
   push:
     branches: [main, master]
-  create:
-    tags:
-      - 'v*'
-  workflow_dispatch:   # manual "Run workflow" button in GitHub UI
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write        # needed to create Releases on tags
 
 jobs:
   build-windows:
-    runs-on: windows-latest   # real Windows 2022 VM — produces genuine Windows DLLs
+    runs-on: windows-latest
 
     steps:
-      # ── 1. Check out your code ─────────────────────────────────────────────
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ── 2. Set up Python ──────────────────────────────────────────────────
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
           cache: 'pip'
 
-      # ── 3. Install CPU-only PyTorch FIRST ─────────────────────────────────
-      #    This is the critical step.  Installing plain "torch" would pull in
-      #    the CUDA build, which requires NVIDIA drivers that Surface devices
-      #    don't have → c10.dll / torch_cuda.dll errors at runtime.
+      # CPU-only torch, installed first so the CUDA build from PyPI never wins.
+      # The CUDA build needs NVIDIA driver DLLs that Surface devices do not have.
       - name: Install CPU-only PyTorch
-        run: |
-          pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+        run: pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
 
-      # ── 4. Install remaining dependencies ─────────────────────────────────
+      # requirements.txt is the single source of truth. An earlier version of
+      # this workflow repeated the list by hand and drifted: matplotlib was
+      # missing, so the packaged app could not open the reference view.
       - name: Install app dependencies
         run: |
-          pip install `
-            "PyQt6>=6.5.0" `
-            "pyqtgraph>=0.13.3" `
-            "numpy>=1.24.0" `
-            "scipy>=1.10.0" `
-            "transformers>=4.30.0" `
-            "Pillow>=9.0.0" `
-            evaluate `
-            accelerate `
-            "websocket-client>=1.9" `
-            pyinstaller
+          pip install -r requirements.txt
+          pip install pyinstaller
 
-      # ── 5. Build with PyInstaller ──────────────────────────────────────────
-      #    The spec automatically detects win32 and uses one-directory mode.
+      - name: Install Infineon Radar SDK (if the wheel secret is set)
+        id: radar
+        shell: pwsh
+        env:
+          WHEEL_B64: ${{ secrets.IFXRADARSDK_WHEEL_B64 }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:WHEEL_B64)) {
+            Write-Host "No IFXRADARSDK_WHEEL_B64 secret - building without live radar."
+            "radar=false" >> $env:GITHUB_OUTPUT
+          } else {
+            New-Item -ItemType Directory -Force -Path vendor | Out-Null
+            [IO.File]::WriteAllBytes("$PWD\vendor\ifxradarsdk.whl",
+              [Convert]::FromBase64String($env:WHEEL_B64))
+            pip install vendor\ifxradarsdk.whl
+            python -c "import ifxradarsdk; print('ifxradarsdk at', ifxradarsdk.__file__)"
+            "radar=true" >> $env:GITHUB_OUTPUT
+          }
+
+      # Puts the fine-tuning weights inside the app so the Train tab never needs
+      # the network. This is what makes training work on a locked-down laptop.
+      - name: Fetch base model for offline training
+        run: python tools/fetch_base_model.py
+
       - name: Build executable
         run: pyinstaller main.spec
 
-      # ── 6. Zip the dist folder ─────────────────────────────────────────────
-      #    dist/SensDSv2/ contains SensDSv2.exe + all DLLs.
-      #    Zip it so it can be downloaded as a single file and copied to USBs.
-      - name: Zip dist folder
-        run: |
-          Compress-Archive -Path dist\SensDSv2 -DestinationPath SensDSv2-Windows-NoRadar.zip
+      # A build that silently lost a dependency looks identical to a good one
+      # until a student clicks the wrong tab, so check the tree before shipping.
+      - name: Verify the bundle
+        run: python tools/verify_bundle.py dist/SensDSv2
 
-      # ── 7. Upload as a build artifact ─────────────────────────────────────
-      #    Find it at: GitHub → Actions → this run → Artifacts
+      - name: Name the artifact
+        id: naming
+        shell: pwsh
+        run: |
+          $suffix = if ("${{ steps.radar.outputs.radar }}" -eq "true") { "" } else { "-NoRadar" }
+          "name=SensDSv2-Windows$suffix" >> $env:GITHUB_OUTPUT
+
+      - name: Zip dist folder
+        run: Compress-Archive -Path dist\SensDSv2 -DestinationPath ${{ steps.naming.outputs.name }}.zip
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SensDSv2-Windows-NoRadar
-          path: SensDSv2-Windows-NoRadar.zip
+          name: ${{ steps.naming.outputs.name }}
+          path: ${{ steps.naming.outputs.name }}.zip
           retention-days: 30
 
-      # ── 8. Create a GitHub Release on version tags ─────────────────────────
-      #    git tag v1.0 && git push --tags  → zip appears as a release download
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: SensDSv2-Windows-NoRadar.zip
+          files: ${{ steps.naming.outputs.name }}.zip
           generate_release_notes: true

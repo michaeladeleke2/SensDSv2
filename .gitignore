@@ -11,5 +11,10 @@ dist/
 tmp.iconset/
 inf_wheel/
 .claude/
+# Infineon's SDK is not freely redistributable and this repo is public, so the
+# wheel reaches CI through the IFXRADARSDK_WHEEL_B64 secret, never through git.
+vendor/
+# Base model weights, fetched at build time by tools/fetch_base_model.py.
+models/
 # *.spec intentionally NOT ignored — main.spec is source-controlled so
 # GitHub Actions and other build machines can find it via git clone.
