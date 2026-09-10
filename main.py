@@ -43,7 +43,41 @@ def self_test() -> int:
     fresh copy from the flash drive — to find out up front.
 
         SensDSv2.exe --self-test
+
+    The Windows build is a windowed app, and PyInstaller gives a windowed app
+    no console at all: sys.stdout is None and print() goes nowhere. So when
+    there is nothing to print to, the report appears in a dialog instead.
     """
+    lines = []
+    code = _self_test_report(lines)
+    text = "\n".join(lines)
+    if sys.stdout is not None:
+        print(text)
+    else:
+        _show_report(code, text)
+    return code
+
+
+def _show_report(code: int, text: str):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv)
+    box = QtWidgets.QMessageBox()
+    box.setWindowTitle("SensDSv2 self-test")
+    box.setIcon(QtWidgets.QMessageBox.Icon.Information if code == 0
+                else QtWidgets.QMessageBox.Icon.Critical)
+    box.setText("Everything required is present." if code == 0
+                else "This build is missing required components.")
+    # Full report under "Show Details", fixed-width so the ok / FAIL column
+    # lines up.
+    box.setDetailedText(text)
+    box.setStyleSheet(
+        "QTextEdit { font-family: Menlo, Consolas, 'DejaVu Sans Mono', "
+        "monospace; font-size: 12px; min-width: 520px; min-height: 320px; }"
+    )
+    box.exec()
+
+
+def _self_test_report(out: list) -> int:
+    """Append the report lines to `out`; return 0 if all required parts load."""
     from ui.train_tab import _MODEL_OPTIONS, _app_dir, model_is_available_offline
 
     checks = [
@@ -64,32 +98,34 @@ def self_test() -> int:
          lambda: __import__("ifxradarsdk.fmcw", fromlist=["DeviceFmcw"]), False),
     ]
 
-    print(f"SensDSv2 self-test    frozen={getattr(sys, 'frozen', False)}")
-    print(f"resources: {_app_dir()}\n")
+    out.append(f"SensDSv2 self-test    frozen={getattr(sys, 'frozen', False)}")
+    out.append(f"resources: {_app_dir()}")
+    out.append("")
 
     failures = 0
     for label, probe, required in checks:
         try:
             probe()
-            print(f"  ok    {label}")
+            out.append(f"  ok    {label}")
         except Exception as exc:
             if required:
                 failures += 1
-                print(f"  FAIL  {label}: {type(exc).__name__}: {exc}")
+                out.append(f"  FAIL  {label}: {type(exc).__name__}: {exc}")
             else:
-                print(f"  --    {label} unavailable ({type(exc).__name__})")
+                out.append(f"  --    {label} unavailable ({type(exc).__name__})")
 
-    print()
+    out.append("")
     for key, model_id in _MODEL_OPTIONS.items():
         offline = model_is_available_offline(model_id)
-        print(f"  {'ok  ' if offline else '--  '}  base model {key}: "
-              + ("bundled, trains offline" if offline
-                 else "not bundled, needs internet once"))
+        out.append(f"  {'ok  ' if offline else '--  '}  base model {key}: "
+                   + ("bundled, trains offline" if offline
+                      else "not bundled, needs internet once"))
 
+    out.append("")
     if failures:
-        print(f"\n{failures} required component(s) missing. This build is broken.")
+        out.append(f"{failures} required component(s) missing. This build is broken.")
         return 1
-    print("\nEverything required is present.")
+    out.append("Everything required is present.")
     return 0
 
 
