@@ -5,26 +5,25 @@ No Python, no `pip install`, no internet.
 
 ---
 
-## The one thing that has to come from Infineon
+## The Infineon SDK
 
 **PyInstaller cannot cross-compile.** A Windows executable has to be built on
 Windows, and the Infineon SDK ships native libraries that must match the build
-platform: `.dll` on Windows, `.dylib` on macOS.
+platform: `.dll` on Windows, `.dylib` on macOS. A macOS wheel inside a Windows
+build gives an app that starts, trains and tests fine but can never open the
+radar.
 
-This repository currently has only the macOS wheel:
+The Windows wheel is committed in `vendor/`:
 
 ```
-inf_wheel/ifxradarsdk-3.6.4+4b4a6245-py3-none-macosx_10_14_universal2.whl
+vendor/ifxradarsdk-3.6.4+4b4a6245-py3-none-win_amd64.whl
 ```
 
-There is no Windows wheel here, and one cannot be produced from the macOS one.
-Until you get `ifxradarsdk-*-win_amd64.whl` from Infineon's Radar Development
-Kit, any Windows build will start, train, test on recorded data and drive the
-robot — but **Connect Radar will not work**. Everything else below is ready for
-that wheel the moment you have it.
-
-**Do not commit the wheel.** This repository is public and the SDK is not
-freely redistributable. Both build routes below take it from somewhere else.
+That is deliberate. The wheel is MIT-licensed (`vendor/LICENSE-ifxradarsdk.txt`),
+which permits redistribution, in this repository and inside the built app, on
+the condition that the copyright notice goes with it. PyInstaller copies the
+package's `dist-info` into the bundle, so the notice ships inside every build
+automatically.
 
 ---
 
@@ -34,20 +33,12 @@ Builds on a real Windows VM, so you never need a Windows machine, and the
 result is downloadable straight away. `.github/workflows/build_windows.yml`
 already does this.
 
-### One-time: give CI the radar wheel
+### One-time setup: none
 
-```bash
-base64 -i ifxradarsdk-3.6.4-py3-none-win_amd64.whl | pbcopy
-```
-
-GitHub → **Settings → Secrets and variables → Actions → New repository secret**
-
-- Name: `IFXRADARSDK_WHEEL_B64`
-- Value: paste
-
-The secret is not readable by forks or pull requests from other people, so the
-SDK is not published by doing this. Without the secret the build still succeeds
-and is named `SensDSv2-Windows-NoRadar` so you can tell the two apart.
+CI installs whatever Windows wheel is in `vendor/`. To upgrade the SDK, replace
+that file with a newer `ifxradarsdk-*-win_amd64.whl` and push. If `vendor/`
+ever holds no Windows wheel, the build still succeeds and is named
+`SensDSv2-Windows-NoRadar` so the two can't be confused.
 
 ### Every build
 
@@ -73,7 +64,7 @@ Use this if you want a build in the next ten minutes and have a Windows laptop.
 ```bat
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
 pip install -r requirements.txt pyinstaller
-pip install path\to\ifxradarsdk-3.6.4-py3-none-win_amd64.whl
+pip install vendor\ifxradarsdk-3.6.4+4b4a6245-py3-none-win_amd64.whl
 python tools\fetch_base_model.py
 pyinstaller main.spec
 python tools\verify_bundle.py dist\SensDSv2
@@ -115,7 +106,9 @@ The folder build opens immediately.
 SensDSv2.exe --self-test
 ```
 
-Imports every subsystem and prints what this copy can do:
+Imports every subsystem and reports what this copy can do. The Windows build
+has no console, so the report opens in a dialog; click **Show Details** for the
+full list:
 
 ```
   ok    PyTorch

@@ -4,17 +4,11 @@ name: Build Windows Executable
 # cross-compile, so this is the only way to make a Windows build from a Mac.
 #
 # ── Live radar ────────────────────────────────────────────────────────────────
-# The Infineon SDK is not on PyPI and is not freely redistributable, so this
-# repository (which is public) must not contain the wheel. The job reads it from
-# a repository secret instead, base64-encoded:
-#
-#     # on a machine holding the Windows wheel:
-#     base64 -i ifxradarsdk-3.6.4-py3-none-win_amd64.whl | pbcopy
-#     # GitHub -> Settings -> Secrets and variables -> Actions -> New secret
-#     #   name: IFXRADARSDK_WHEEL_B64
-#
-# With the secret set, the build supports live radar. Without it the build still
-# works for everything else and says so in the artifact name.
+# The Infineon SDK is not on PyPI, so the Windows wheel is committed in vendor/.
+# It is MIT-licensed, which permits redistribution provided the notice travels
+# with it; PyInstaller copies the package's dist-info, notice included, into
+# every bundle. If vendor/ holds no Windows wheel the build still succeeds
+# without live radar and says so in the artifact name.
 #
 # Triggers: push to main, version tags (-> GitHub Release), and manual runs.
 on:
@@ -53,20 +47,17 @@ jobs:
           pip install -r requirements.txt
           pip install pyinstaller
 
-      - name: Install Infineon Radar SDK (if the wheel secret is set)
+      - name: Install Infineon Radar SDK (if a Windows wheel is in vendor/)
         id: radar
         shell: pwsh
-        env:
-          WHEEL_B64: ${{ secrets.IFXRADARSDK_WHEEL_B64 }}
         run: |
-          if ([string]::IsNullOrWhiteSpace($env:WHEEL_B64)) {
-            Write-Host "No IFXRADARSDK_WHEEL_B64 secret - building without live radar."
+          $wheel = Get-ChildItem vendor\ifxradarsdk-*-win_amd64.whl -ErrorAction SilentlyContinue |
+                   Select-Object -First 1
+          if ($null -eq $wheel) {
+            Write-Host "No Windows ifxradarsdk wheel in vendor/ - building without live radar."
             "radar=false" >> $env:GITHUB_OUTPUT
           } else {
-            New-Item -ItemType Directory -Force -Path vendor | Out-Null
-            [IO.File]::WriteAllBytes("$PWD\vendor\ifxradarsdk.whl",
-              [Convert]::FromBase64String($env:WHEEL_B64))
-            pip install vendor\ifxradarsdk.whl
+            pip install $wheel.FullName
             python -c "import ifxradarsdk; print('ifxradarsdk at', ifxradarsdk.__file__)"
             "radar=true" >> $env:GITHUB_OUTPUT
           }
