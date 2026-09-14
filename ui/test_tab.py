@@ -179,7 +179,7 @@ def _apply_jet(normalized):
 
 def _frames_to_pil(frames):
     """
-    Convert raw radar frames → 224×224 PIL spectrogram image.
+    Convert raw radar frames → the PIL spectrogram image the model is given.
 
     Directly uses the vectorised pipeline (no intermediate SpectrogramProcessor
     state) so inference always gets a clean 3-second epoch regardless of how
@@ -200,7 +200,15 @@ def _frames_to_pil(frames):
         if stack.ndim == 3:
             stack = stack[:, np.newaxis]
 
-        # Honours the active spectrogram method (STFT or Infineon SDK)
+        from core.processing import METHOD_INFINEON, get_method
+        if get_method() == METHOD_INFINEON:
+            # Exactly the image the Collect tab saved for training: the same
+            # function, the reference script's drawing, at the same 400 x 300,
+            # handed to the same image processor.
+            from core.reference_image import reference_spectrogram, training_image
+            return training_image(reference_spectrogram(stack))
+
+        # STFT: the app's own coloring, as before.
         spect_db = epoch_spectrogram_db(stack)      # (freq_bins, n_cols) float32 dB
 
         # Keep float32 throughout — avoids the 2× memory allocation of a

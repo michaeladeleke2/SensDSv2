@@ -9,6 +9,10 @@ from core.processing import (
     get_image_velocity_flipped, get_method, image_rows, method_max_velocity,
     set_image_velocity_flipped, set_method,
 )
+from core.reference_image import (
+    REF_JET_VMIN, current_jet_vmin, get_reduce_noise, reference_spectrogram,
+    set_reduce_noise, training_image,
+)
 from ui import app_colors, HintCard, _scrollable_left
 from ui.spectrogram_widget import (
     DB_MIN, DB_MAX, FREQ_BINS, MAX_VELOCITY, FRAME_TIME_S, make_jet_colormap,
@@ -40,14 +44,26 @@ def read_capture_info(folder: str) -> dict | None:
         return None
 
 
+def _renderer_for(method: str) -> str:
+    """How a method's training images are drawn."""
+    return "reference" if method == METHOD_INFINEON else "sensds"
+
+
 def write_capture_info(folder: str, method: str, flipped: bool):
+    renderer = _renderer_for(method)
+    info = {
+        "spectrogram_method": method,
+        "renderer": renderer,
+        # The reference drawing has one orientation, the most negative
+        # velocity on top, which is what "flipped" means for the app's own.
+        "velocity_flipped": True if renderer == "reference" else bool(flipped),
+        "updated": time.strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    if renderer == "reference":
+        info["jet_vmin"] = current_jet_vmin()
     try:
         with open(os.path.join(folder, CAPTURE_INFO), "w") as f:
-            json.dump({
-                "spectrogram_method": method,
-                "velocity_flipped": bool(flipped),
-                "updated": time.strftime("%Y-%m-%d %H:%M:%S"),
-            }, f, indent=2)
+            json.dump(info, f, indent=2)
     except Exception:
         # Never let bookkeeping lose a capture.
         pass
@@ -58,10 +74,9 @@ def capture_mismatch(folder: str, method: str, flipped: bool) -> str:
     Describe how the current settings differ from the samples already in a
     folder, or "" when they agree (or the folder is new).
 
-    Mixing orientations in one dataset is the damaging case: a vertical flip
-    swaps toward for away, so approaching and receding gestures stop being
-    separable. Mixing methods is just as bad — the two produce different image
-    shapes and different features.
+    Any difference in how the pictures are made splits one gesture into two
+    kinds of image. A vertical flip is the worst of them: it swaps toward for
+    away, so approaching and receding gestures stop being separable.
     """
     if not os.path.isdir(folder):
         return ""
@@ -72,16 +87,31 @@ def capture_mismatch(folder: str, method: str, flipped: bool) -> str:
         return ("This folder has samples from before SensDS recorded these "
                 "settings. If they were collected differently, the mix will "
                 "confuse the model.")
+    renderer = _renderer_for(method)
+    # Folders written before the renderer was recorded used the app's own.
+    old_renderer = info.get("renderer", "sensds")
+    same_method = info.get("spectrogram_method") == method
     diffs = []
-    if info.get("spectrogram_method") != method:
+    if not same_method:
         diffs.append(f"method was {info.get('spectrogram_method')}")
-    if bool(info.get("velocity_flipped")) != bool(flipped):
+    elif old_renderer != renderer:
+        diffs.append("they were drawn with the app's own coloring"
+                     if old_renderer == "sensds"
+                     else "they were drawn the reference way")
+    elif renderer == "reference":
+        if float(info.get("jet_vmin", REF_JET_VMIN)) != current_jet_vmin():
+            diffs.append("the Reduce noise setting was different")
+    elif bool(info.get("velocity_flipped")) != bool(flipped):
         diffs.append("velocity axis was the other way up")
     if not diffs:
         return ""
+    # Old coloring has no setting to switch back to; the only fix is a clean
+    # folder.
+    fix = ("Delete them first" if same_method and old_renderer != renderer
+           else "Delete them or switch back")
     return ("Existing samples here do not match: " + ", ".join(diffs) +
-            ". Delete them or switch back, or the model will be trained on "
-            "two different kinds of picture.")
+            f". {fix}, or the model will be trained on two different kinds "
+            "of picture.")
 
 
 def _apply_jet_colormap(normalized):
@@ -225,9 +255,10 @@ def _collect_style(c: dict) -> str:
 class CaptureWorker(QtCore.QObject):
     countdown = QtCore.pyqtSignal(int)
     capturing = QtCore.pyqtSignal()
-    # emits (spectrogram_array, n_frames_used, raw_cube) so the preview can
-    # compute the correct time axis and the caller can save the raw frames.
-    sample_done = QtCore.pyqtSignal(np.ndarray, int, np.ndarray)
+    # emits (spectrogram_array, n_frames_used, raw_cube, method): the method it
+    # was computed with, since that decides what the arrays are and how the
+    # sample is drawn and saved.
+    sample_done = QtCore.pyqtSignal(np.ndarray, int, np.ndarray, str)
     batch_done = QtCore.pyqtSignal()
     stopped = QtCore.pyqtSignal()
 
@@ -285,9 +316,15 @@ class CaptureWorker(QtCore.QObject):
                 # buffer floor is max(buffer_frames, EPOCH_FRAMES)=30, so a
                 # fixed count below 30 would never fill it and would silently
                 # emit nothing. Same computation as its _emit_batch().
-                result = epoch_spectrogram_db(raw_cube)
+                method = get_method()
+                if method == METHOD_INFINEON:
+                    # The reference script's own spectrogram, which the saved
+                    # image is drawn from (see core/reference_image.py).
+                    result = reference_spectrogram(raw_cube)
+                else:
+                    result = epoch_spectrogram_db(raw_cube)
                 if result is not None:
-                    self.sample_done.emit(result, n, raw_cube)
+                    self.sample_done.emit(result, n, raw_cube, method)
 
         self.batch_done.emit()
 
@@ -411,6 +448,21 @@ class CollectTab(QtWidgets.QWidget):
         )
         self._flip_check.toggled.connect(self._on_capture_setting)
         layout.addWidget(self._flip_check)
+
+        self._noise_check = QtWidgets.QCheckBox("Reduce noise")
+        self._noise_check.setChecked(get_reduce_noise())
+        self._noise_check.setToolTip(
+            "Lower the reference drawing's color floor (jet_vmin) from -20\n"
+            "to -50 dB.\n\n"
+            "When nothing in a capture reaches -20 dB, as in every idle\n"
+            "capture, the reference script falls back to a floor 40 dB below\n"
+            "the brightest point and the picture fills with noise. At -50 dB\n"
+            "idle stays dark and gestures show more faint detail.\n\n"
+            "This changes the saved training images and what the model is\n"
+            "shown live, so keep it the same for a whole dataset."
+        )
+        self._noise_check.toggled.connect(self._on_capture_setting)
+        layout.addWidget(self._noise_check)
 
         self._capture_note = QtWidgets.QLabel("")
         self._capture_note.setObjectName("capture_note")
@@ -616,26 +668,46 @@ class CollectTab(QtWidgets.QWidget):
         self._flip_check.setChecked(get_image_velocity_flipped())
         self._flip_check.blockSignals(False)
 
+        self._noise_check.blockSignals(True)
+        self._noise_check.setChecked(get_reduce_noise())
+        self._noise_check.blockSignals(False)
+
+        self._sync_capture_visibility()
         self._update_capture_note()
         self._sync_preview_mode()
+        if self._ref_preview is not None:
+            self._ref_preview.redraw()      # only if the color floor changed
 
     def _on_capture_setting(self):
         set_method(self._method_combo.currentData())
         set_image_velocity_flipped(self._flip_check.isChecked())
+        set_reduce_noise(self._noise_check.isChecked())
+        self._sync_capture_visibility()
         self._update_capture_note()
         self._sync_preview_mode()
+        if self._ref_preview is not None:
+            self._ref_preview.redraw()
         self._refresh_counts()
 
+    def _sync_capture_visibility(self):
+        infineon = self._method_combo.currentData() == METHOD_INFINEON
+        # The reference drawing has one fixed orientation, so the flip only
+        # applies to STFT; the color floor only exists in the reference drawing.
+        self._flip_check.setVisible(not infineon)
+        self._noise_check.setVisible(infineon)
+
     def _update_capture_note(self):
-        toward = "below" if self._flip_check.isChecked() else "above"
-        note = (
-            f"Saved as {self._method_combo.currentText()}, with motion toward "
-            f"the radar {toward} the center line. The Test tab reads live "
-            f"gestures the same way."
-        )
         if self._method_combo.currentData() == METHOD_INFINEON:
-            note += (" The preview is drawn by the reference script; the "
-                     "saved training image uses the app's own coloring.")
+            note = ("Saved exactly as the reference script draws it, the "
+                    "picture shown on the right, and the Test tab reads live "
+                    "gestures the same way.")
+        else:
+            toward = "below" if self._flip_check.isChecked() else "above"
+            note = (
+                f"Saved as {self._method_combo.currentText()}, with motion "
+                f"toward the radar {toward} the center line. The Test tab "
+                f"reads live gestures the same way."
+            )
         self._capture_note.setText(note)
 
     def _sync_preview_mode(self):
@@ -821,70 +893,65 @@ class CollectTab(QtWidgets.QWidget):
             "color: #c0392b; font-size: 22px; font-weight: bold;"
         )
 
-    def _on_sample_done(self, spectrogram, n_frames, raw_cube):
+    def _on_sample_done(self, spectrogram, n_frames, raw_cube, method=None):
+        # The method the worker computed with, which is what these arrays are;
+        # the combo could have been changed since the capture started.
+        method = method or get_method()
         self._samples_collected += 1
         self._progress_bar.setValue(self._samples_collected)
+        stem = os.path.join(self._save_dir,
+                            f"sample_{self._samples_collected:03d}")
 
-        # --- Save processed spectrogram ---
-        npy_path = os.path.join(
-            self._save_dir, f"sample_{self._samples_collected:03d}.npy"
-        )
-        np.save(npy_path, spectrogram)
+        # --- Save the spectrogram and the raw radar cube ---
+        np.save(stem + ".npy", spectrogram)
+        np.save(stem + "_raw.npy", raw_cube)
+        png_path = stem + ".png"
 
-        # --- Save raw radar cube ---
-        raw_path = os.path.join(
-            self._save_dir, f"sample_{self._samples_collected:03d}_raw.npy"
-        )
-        np.save(raw_path, raw_cube)
-
-        # --- Smooth and clip for display / PNG save ---
-        smoothed = gaussian_filter(
-            spectrogram.astype(np.float64), sigma=[2.0, 1.5]
-        )
-        display = np.clip(smoothed, DB_MIN, DB_MAX).astype(np.float32)
-
-        # --- Save PNG ---
-        # spectrogram shape: (freq_bins, n_cols) — freq_bins depends on the
-        # active method (1024 for STFT, 512 for Infineon SDK), so read it off
-        # the array rather than assuming the module constant.
-        # We want: width = n_cols (time), height = freq_bins (velocity)
-        # image_rows() puts the chosen velocity sign at the top and is the same
-        # call the Test tab makes, so training and inference always agree.
-        freq_bins = display.shape[0]
-        normalized = (display - DB_MIN) / (DB_MAX - DB_MIN)
-        colored = _apply_jet_colormap(normalized)           # (freq_bins, n_cols, 3)
-        colored_rows = image_rows(colored)
-        n_cols = colored_rows.shape[1]
-        img_raw = QtGui.QImage(
-            colored_rows.tobytes(),
-            n_cols,
-            freq_bins,
-            n_cols * 3,
-            QtGui.QImage.Format.Format_RGB888,
-        )
-        # Scale to a consistent landscape size (400×300) for the training pipeline.
-        img_save = img_raw.scaled(
-            400, 300,
-            QtCore.Qt.AspectRatioMode.IgnoreAspectRatio,
-            QtCore.Qt.TransformationMode.SmoothTransformation,
-        )
-        png_path = os.path.join(
-            self._save_dir, f"sample_{self._samples_collected:03d}.png"
-        )
-        img_save.save(png_path)
-
-        # --- Record how this folder was captured ---
-        write_capture_info(self._save_dir, get_method(),
-                           get_image_velocity_flipped())
-
-        # --- Update preview ---
-        self._sync_preview_mode()
-        if self._preview_stack.currentWidget() is self._ref_preview:
-            # Infineon SDK: drawn by the reference script's own offline path
-            # from the raw cube just saved. The heavy part runs off this thread.
-            self._ref_preview.show_capture(raw_cube)
+        if method == METHOD_INFINEON:
+            # The training image is the reference drawing itself, made by the
+            # same call the Test and VEX AIM tabs make on live frames, so what
+            # students see saved is exactly what the model learns from.
+            training_image(spectrogram).save(png_path)
+            write_capture_info(self._save_dir, method,
+                               get_image_velocity_flipped())
+            self._sync_preview_mode()
+            if self._preview_stack.currentWidget() is self._ref_preview:
+                self._ref_preview.show_spectrogram(spectrogram)
         else:
-            # Compute the actual gesture duration from the number of radar frames.
+            # --- STFT: the app's own coloring, smoothed and clipped ---
+            smoothed = gaussian_filter(
+                spectrogram.astype(np.float64), sigma=[2.0, 1.5]
+            )
+            display = np.clip(smoothed, DB_MIN, DB_MAX).astype(np.float32)
+
+            # spectrogram shape: (freq_bins, n_cols); width = n_cols (time),
+            # height = freq_bins (velocity). image_rows() puts the chosen
+            # velocity sign at the top and is the same call the Test tab makes,
+            # so training and inference always agree.
+            freq_bins = display.shape[0]
+            normalized = (display - DB_MIN) / (DB_MAX - DB_MIN)
+            colored = _apply_jet_colormap(normalized)       # (freq_bins, n_cols, 3)
+            colored_rows = image_rows(colored)
+            n_cols = colored_rows.shape[1]
+            img_raw = QtGui.QImage(
+                colored_rows.tobytes(),
+                n_cols,
+                freq_bins,
+                n_cols * 3,
+                QtGui.QImage.Format.Format_RGB888,
+            )
+            # Scale to a consistent landscape size (400×300) for training.
+            img_save = img_raw.scaled(
+                400, 300,
+                QtCore.Qt.AspectRatioMode.IgnoreAspectRatio,
+                QtCore.Qt.TransformationMode.SmoothTransformation,
+            )
+            img_save.save(png_path)
+            write_capture_info(self._save_dir, method,
+                               get_image_velocity_flipped())
+
+            # --- Preview ---
+            self._sync_preview_mode()
             duration = n_frames * FRAME_TIME_S
             n_cols_display = display.shape[1]
             time_scale = duration / n_cols_display

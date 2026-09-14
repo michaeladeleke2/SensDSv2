@@ -151,7 +151,7 @@ def _apply_jet(normalized: np.ndarray) -> np.ndarray:
 
 def _frames_to_pil(frames: list):
     """
-    Convert raw radar frames → 224×224 PIL spectrogram image.
+    Convert raw radar frames → the PIL spectrogram image the model is given.
     Uses last EPOCH_FRAMES (30) frames matching the 3-second training window.
     """
     from PIL import Image
@@ -164,7 +164,15 @@ def _frames_to_pil(frames: list):
         # Ensure (n_frame, n_ant, n_chirp, n_sample)
         if stack.ndim == 3:
             stack = stack[:, np.newaxis]
-        # Honours the active spectrogram method (STFT or Infineon SDK)
+        from core.processing import METHOD_INFINEON, get_method
+        if get_method() == METHOD_INFINEON:
+            # Exactly the image the Collect tab saved for training: the same
+            # function, the reference script's drawing, at the same 400 x 300,
+            # handed to the same image processor.
+            from core.reference_image import reference_spectrogram, training_image
+            return training_image(reference_spectrogram(stack))
+
+        # STFT: the app's own coloring, as before.
         spect_db = epoch_spectrogram_db(stack)      # (freq_bins, n_cols) float32 dB
         # Keep float32 — avoids the 2× memory + compute cost of a float64 round-trip.
         smoothed   = gaussian_filter(spect_db, sigma=[1.0, 0.5])

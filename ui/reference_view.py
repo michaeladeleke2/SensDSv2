@@ -11,9 +11,12 @@ that script's own code:
   ReferenceSpectrogramView   the live, scrolling plot, via LiveDopplerProcessor
                              and LiveSpectrogramPlot. The Visualize tab's main
                              view for the Infineon SDK method.
-  ReferenceRecordedView      one finished capture, via compute_recorded and
-                             plot_recorded_spectrogram. The Collect tab's
-                             "Last Captured Gesture" for the Infineon SDK method.
+  ReferenceRecordedView      one finished capture, via plot_recorded_spectrogram.
+                             The Collect tab's "Last Captured Gesture".
+
+Both use the app-wide color floor from core.reference_image, the reference
+default unless Reduce noise is on, so the screen always matches the saved
+training images.
 
 Heavy work runs off the GUI thread and the live canvas is redrawn on a timer.
 Neither changes what the reference code produces.
@@ -22,30 +25,23 @@ Neither changes what the reference code produces.
 import numpy as np
 from PyQt6 import QtCore, QtWidgets
 
+from core.reference_image import (
+    REF_ANTENNA, REF_JET_VMIN, REF_MAX_SPEED_M_S, current_jet_vmin,
+    import_reference,
+)
 from ui import app_colors
+
+# Kept under its old name for callers and tests that import it from here.
+_import_reference = import_reference
+
+__all__ = [
+    "REF_ANTENNA", "REF_JET_VMIN", "REF_MAX_SPEED_M_S",
+    "ReferenceSpectrogramView", "ReferenceRecordedView",
+]
 
 # Frames per second the radar delivers; used to size the reference history
 # buffer so it covers the seconds the time window asks for.
 _FPS = 10
-
-# The reference script's own defaults, passed to it unchanged. Named once here
-# so the live view, the capture view and the readout cannot disagree.
-REF_MAX_SPEED_M_S = 6.19405905
-REF_JET_VMIN = -20.0
-REF_ANTENNA = 0
-
-
-def _import_reference():
-    """
-    Import the reference script, with matplotlib pointed at Qt first.
-
-    Done lazily so the app starts without matplotlib installed and only pays
-    the import cost when a reference view is actually built.
-    """
-    import matplotlib
-    matplotlib.use("QtAgg", force=False)
-    from core import doppler_spectrogram_live as ref
-    return ref
 
 
 # ── live ──────────────────────────────────────────────────────────────────────
@@ -68,7 +64,7 @@ class _RefWorker(QtCore.QObject):
             if frame.ndim == 3:
                 frame = frame[REF_ANTENNA]
             if self._proc is None:
-                ref = _import_reference()
+                ref = import_reference()
                 n_chirp, n_sample = frame.shape
                 self._proc = ref.LiveDopplerProcessor(
                     n_sample=n_sample,
@@ -93,10 +89,14 @@ class ReferenceSpectrogramView(QtWidgets.QWidget):
 
     error = QtCore.pyqtSignal(str)
 
-    def __init__(self, history_length: int = 100, parent=None):
+    def __init__(self, history_length: int = 100, jet_vmin: float | None = None,
+                 parent=None):
         super().__init__(parent)
         self._c = app_colors()
         self._history_length = history_length
+        # Fixed for the life of the plot; the Visualize tab rebuilds the view
+        # when Reduce noise is toggled.
+        self._jet_vmin = current_jet_vmin() if jet_vmin is None else jet_vmin
         self._plot = None
         self._canvas = None
         self._worker = None
@@ -110,11 +110,11 @@ class ReferenceSpectrogramView(QtWidgets.QWidget):
         self._layout = layout
 
         try:
-            ref = _import_reference()
+            ref = import_reference()
             self._plot = ref.LiveSpectrogramPlot(
                 history_length=history_length,
                 max_speed_m_s=REF_MAX_SPEED_M_S,
-                jet_vmin=REF_JET_VMIN,
+                jet_vmin=self._jet_vmin,
                 orientation=ref.ORIENT_FRAME_X,
             )
             self._canvas = self._plot.fig.canvas
@@ -160,6 +160,10 @@ class ReferenceSpectrogramView(QtWidgets.QWidget):
     def history_length(self) -> int:
         """Frames of history the plot spans; fixed when the view is built."""
         return self._history_length
+
+    @property
+    def jet_vmin(self) -> float:
+        return self._jet_vmin
 
     @property
     def redraws_per_second(self) -> float:
@@ -257,11 +261,13 @@ class ReferenceRecordedView(QtWidgets.QWidget):
     """
     One finished capture, drawn by the reference script's offline path.
 
-    compute_recorded() turns the raw cube into the spectrogram on a pool thread,
-    since it takes a quarter of a second or more per capture. Then
-    plot_recorded_spectrogram() draws it on the GUI thread, where Qt requires
-    figures to be made. Each new capture replaces the previous figure, which is
-    closed so figures do not pile up over a long collection session.
+    The Collect tab hands over the spectrogram it has already computed for the
+    training image, via show_spectrogram(), so the capture is only computed
+    once. show_capture() takes a raw cube instead and runs compute_recorded()
+    on a pool thread first. Either way plot_recorded_spectrogram() draws on the
+    GUI thread, where Qt requires figures to be made, and each new capture
+    replaces the previous figure, which is closed so figures do not pile up
+    over a long session.
 
     plot_recorded_spectrogram() lays its axes over the whole figure, so the
     image fills the panel with no tick labels or title visible. That is the
@@ -277,6 +283,8 @@ class ReferenceRecordedView(QtWidgets.QWidget):
         self._fig = None
         self._canvas = None
         self._token = 0
+        self._last = None          # spectrogram currently drawn
+        self._drawn_vmin = None    # color floor it was drawn with
 
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -299,8 +307,8 @@ class ReferenceRecordedView(QtWidgets.QWidget):
 
         try:
             # Imported here, on the GUI thread, so pyplot and its Qt backend are
-            # set up before any pool thread touches the module.
-            self._ref = _import_reference()
+            # set up before any other thread touches the module.
+            self._ref = import_reference()
         except Exception as e:
             self._placeholder.setText(
                 "Reference view unavailable.\n\n"
@@ -317,6 +325,13 @@ class ReferenceRecordedView(QtWidgets.QWidget):
         """The figure currently shown, or None before the first capture."""
         return self._fig
 
+    def show_spectrogram(self, spectrogram: np.ndarray):
+        """Draw a spectrogram from compute_recorded, (n_frame, doppler_bins)."""
+        if self._ref is None:
+            return
+        self._token += 1          # anything still computing is now stale
+        self._draw(np.asarray(spectrogram))
+
     def show_capture(self, cube: np.ndarray):
         """Draw a raw capture shaped (n_frame, n_ant, n_chirp, n_sample)."""
         if self._ref is None:
@@ -326,12 +341,21 @@ class ReferenceRecordedView(QtWidgets.QWidget):
                           self._token, self._signals)
         QtCore.QThreadPool.globalInstance().start(job)
 
+    def redraw(self):
+        """Redraw the last capture if the color floor has changed since."""
+        if self._last is not None and self._drawn_vmin != current_jet_vmin():
+            self._draw(self._last)
+
     def _on_ready(self, spectrogram, token):
         # Captures can finish out of order when they arrive close together;
         # only the most recent one is worth drawing.
         if token != self._token:
             return
+        self._draw(spectrogram)
+
+    def _draw(self, spectrogram):
         import matplotlib.pyplot as plt
+        jet_vmin = current_jet_vmin()
         # The reference script turns pyplot's interactive mode on for its live
         # plot, and in interactive mode every new figure pops up in a window of
         # its own. Hold it off for this one figure: that changes whether a
@@ -342,7 +366,7 @@ class ReferenceRecordedView(QtWidgets.QWidget):
             fig = self._ref.plot_recorded_spectrogram(
                 spectrogram,
                 max_speed_m_s=REF_MAX_SPEED_M_S,
-                jet_vmin=REF_JET_VMIN,
+                jet_vmin=jet_vmin,
             )
         except Exception as e:
             self.error.emit(str(e))
@@ -360,6 +384,7 @@ class ReferenceRecordedView(QtWidgets.QWidget):
         self._placeholder.hide()
         self._layout.addWidget(canvas, 1)
         self._fig, self._canvas = fig, canvas
+        self._last, self._drawn_vmin = spectrogram, jet_vmin
         canvas.draw_idle()
 
     def _on_failed(self, msg: str):
@@ -378,6 +403,7 @@ class ReferenceRecordedView(QtWidgets.QWidget):
     def shutdown(self):
         self._token += 1          # anything still computing is now stale
         self._drop_figure()
+        self._last = None
         self._placeholder.show()
 
     def closeEvent(self, event):

@@ -591,7 +591,10 @@ METHOD_INFINEON = "infineon"   # doppler_spectrogram.py port (Infineon SDK style
 # Backwards-compatible alias for the earlier internal name.
 METHOD_DOPPLER = METHOD_INFINEON
 
-_METHOD = METHOD_STFT
+# The app opens on the Infineon SDK method, whose display, saved training
+# images and live inference are all drawn the reference script's way. STFT
+# stays available for the older datasets and models built with it.
+_METHOD = METHOD_INFINEON
 
 
 def set_method(method: str):

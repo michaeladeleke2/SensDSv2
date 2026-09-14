@@ -355,6 +355,23 @@ class VisualizeTab(QtWidgets.QWidget):
         self._alongside_check.toggled.connect(self._sync_main_view)
         layout.addWidget(self._alongside_check)
 
+        from core.reference_image import get_reduce_noise
+        self._ref_noise_check = QtWidgets.QCheckBox("Reduce noise")
+        self._ref_noise_check.setChecked(get_reduce_noise())
+        self._ref_noise_check.setToolTip(
+            "Lower the reference plot's color floor (jet_vmin) from -20 to\n"
+            "-50 dB.\n\n"
+            "When nothing in view reaches -20 dB, as when nobody is moving,\n"
+            "the reference script falls back to a floor 40 dB below the\n"
+            "brightest point and the background fills with noise. At -50 dB\n"
+            "a still scene stays dark and gestures show more faint detail.\n\n"
+            "Shared with the Collect tab: it also changes the saved training\n"
+            "images and what the model is shown live."
+        )
+        self._ref_noise_check.toggled.connect(self._on_ref_noise_toggled)
+        layout.addWidget(self._ref_noise_check)
+
+        # Only used to report a reference view that failed to start.
         self._main_note = QtWidgets.QLabel("")
         self._main_note.setObjectName("desc")
         self._main_note.setWordWrap(True)
@@ -528,15 +545,9 @@ class VisualizeTab(QtWidgets.QWidget):
                   self._flip_check, self._sensds_image):
             w.setVisible(show_sensds)
         self._alongside_check.setVisible(ref_main)
+        self._ref_noise_check.setVisible(ref_main)
 
-        if ref_main:
-            note = ("The main view is the reference script, drawn exactly as "
-                    "written with its own colors, axes and orientation. Time "
-                    "window and plot size apply to it.")
-            if show_sensds and not self._flip_check.isChecked():
-                note += (" Tick Flip velocity axis to sit the SensDS view the "
-                         "same way up.")
-        elif unavailable:
+        if unavailable:
             note = ("The reference view could not start (it needs "
                     "matplotlib), so the SensDS view is shown instead.")
         else:
@@ -554,8 +565,10 @@ class VisualizeTab(QtWidgets.QWidget):
         if self._reference is not None:
             return
         from ui.reference_view import ReferenceSpectrogramView
+        from core.reference_image import current_jet_vmin
         self._reference = ReferenceSpectrogramView(
-            history_length=self._reference_history_frames())
+            history_length=self._reference_history_frames(),
+            jet_vmin=current_jet_vmin())
         self._reference.error.connect(self._on_reference_error)
         # Index 1 is just after the leading stretch: the main view sits on the
         # left, with the SensDS view beside it when that is switched on.
@@ -576,6 +589,14 @@ class VisualizeTab(QtWidgets.QWidget):
         if self._reference is None:
             return
         self._close_reference()
+        self._sync_main_view()
+
+    def _on_ref_noise_toggled(self, on: bool):
+        from core.reference_image import set_reduce_noise
+        set_reduce_noise(on)
+        # jet_vmin is fixed when the reference plot is built, so rebuild it.
+        if self._reference is not None:
+            self._close_reference()
         self._sync_main_view()
 
     def _on_reference_error(self, msg: str):
@@ -606,6 +627,10 @@ class VisualizeTab(QtWidgets.QWidget):
             idx = self._combo.findData(method)
             if idx >= 0:
                 self._combo.setCurrentIndex(idx)     # runs _on_method_changed
+        # Reduce noise is shared with the Collect tab for the same reason.
+        from core.reference_image import get_reduce_noise
+        if self._ref_noise_check.isChecked() != get_reduce_noise():
+            self._ref_noise_check.setChecked(get_reduce_noise())  # rebuilds
 
     def _on_size_changed(self):
         self._apply_plot_size()
@@ -664,8 +689,7 @@ class VisualizeTab(QtWidgets.QWidget):
     def _update_readout(self):
         ref = self._reference
         if ref is not None:
-            from ui.reference_view import (
-                REF_ANTENNA, REF_JET_VMIN, REF_MAX_SPEED_M_S)
+            from core.reference_image import REF_ANTENNA, REF_MAX_SPEED_M_S
             frames = ref.history_length
             # Same column layout as the SensDS readout below; kept short
             # because long lines push the 300 px panel wider than it is.
@@ -674,7 +698,7 @@ class VisualizeTab(QtWidgets.QWidget):
                 f"Antenna        {REF_ANTENNA}\n"
                 f"History        {frames} frames ({frames / 10:.0f} s)\n"
                 f"Velocity       +/-{REF_MAX_SPEED_M_S:.2f} m/s\n"
-                f"Color floor    {REF_JET_VMIN:.0f} dB (jet_vmin)\n"
+                f"Color floor    {ref.jet_vmin:.0f} dB (jet_vmin)\n"
                 f"Redraw         {ref.redraws_per_second:.0f} per second\n"
                 f"Toward radar   below the center"
             )
