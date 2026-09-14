@@ -179,11 +179,20 @@ class VisualizeTab(QtWidgets.QWidget):
         self._plot_row.addWidget(self.spectrogram, 1)
         self._plot_row.addStretch()
         rlay.addLayout(self._plot_row, 1)
-        rlay.addWidget(zoom_button_row(
+        self._zoom_row = zoom_button_row(
             self.spectrogram._plot, self._c,
             on_reset=self.spectrogram.reset_view,
             reset_tip="Back to the slider settings",
-        ))
+        )
+        rlay.addWidget(self._zoom_row)
+
+        # Rebuilding the reference plot means a new matplotlib figure, so a
+        # dragged time slider waits for it to settle rather than rebuilding on
+        # every tick.
+        self._ref_rebuild = QtCore.QTimer(self)
+        self._ref_rebuild.setSingleShot(True)
+        self._ref_rebuild.setInterval(300)
+        self._ref_rebuild.timeout.connect(self._rebuild_reference)
         outer.addWidget(right, 1)
 
         self._sync_method_widgets()
@@ -229,6 +238,15 @@ class VisualizeTab(QtWidgets.QWidget):
         max_v = self.spectrogram.max_velocity()
         vmin0, vmax0 = self.spectrogram.velocity_limits()
 
+        # Controls that only reach the SensDS view are built into containers,
+        # so they can be hidden together while the reference script is the
+        # main view and they would do nothing. See _sync_main_view().
+        panel_layout = layout
+        self._sensds_axes = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(self._sensds_axes)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+
         head = QtWidgets.QHBoxLayout()
         head.setContentsMargins(0, 0, 0, 0)
         name = QtWidgets.QLabel("Velocity range (Y)")
@@ -273,6 +291,8 @@ class VisualizeTab(QtWidgets.QWidget):
             btn.clicked.connect(lambda _, val=v: self._set_vel(val))
             preset_row.addWidget(btn)
         layout.addLayout(preset_row)
+        layout = panel_layout
+        layout.addWidget(self._sensds_axes)
 
         self._time_slider, self._time_value = self._slider_row(
             layout, "Time window (X)",
@@ -324,24 +344,28 @@ class VisualizeTab(QtWidgets.QWidget):
         self._size_combo.currentIndexChanged.connect(self._on_size_changed)
         layout.addWidget(self._size_combo)
 
-        self._compare_check = QtWidgets.QCheckBox("Compare with reference view")
-        self._compare_check.setToolTip(
-            "Show the reference live spectrogram beside this one.\n\n"
-            "The right-hand plot is drawn by core/doppler_spectrogram_live.py,\n"
-            "an unmodified copy of the reference script, using its own\n"
-            "LiveDopplerProcessor and LiveSpectrogramPlot. Both panels are fed\n"
-            "the same radar frames, so any difference is in the code, not the\n"
-            "data.\n\n"
-            "Costs roughly 20% of a core while running."
+        self._alongside_check = QtWidgets.QCheckBox("Show SensDS view alongside")
+        self._alongside_check.setToolTip(
+            "Also show the app's own adjustable view beside the reference,\n"
+            "fed the same radar frames, so any difference between them is in\n"
+            "the code and not the data. The velocity range, flip, noise floor\n"
+            "and smoothing controls appear with it, since they only reach\n"
+            "that view."
         )
-        self._compare_check.toggled.connect(self._on_compare_toggled)
-        layout.addWidget(self._compare_check)
+        self._alongside_check.toggled.connect(self._sync_main_view)
+        layout.addWidget(self._alongside_check)
 
-        self._compare_note = QtWidgets.QLabel("")
-        self._compare_note.setObjectName("desc")
-        self._compare_note.setWordWrap(True)
-        layout.addWidget(self._compare_note)
+        self._main_note = QtWidgets.QLabel("")
+        self._main_note.setObjectName("desc")
+        self._main_note.setWordWrap(True)
+        layout.addWidget(self._main_note)
 
+        # The Image controls only reach the SensDS view as well. The divider
+        # goes in with them so a hidden group leaves no stray rule behind.
+        self._sensds_image = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(self._sensds_image)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
         layout.addWidget(self._divider())
 
         # ── image ────────────────────────────────────────────────────────────
@@ -374,6 +398,8 @@ class VisualizeTab(QtWidgets.QWidget):
                  "blur fine Doppler detail."),
             on_change=self._on_smooth_changed, scale=10.0,
         )
+        layout = panel_layout
+        layout.addWidget(self._sensds_image)
 
         layout.addStretch()
 
@@ -458,12 +484,9 @@ class VisualizeTab(QtWidgets.QWidget):
     def _on_time_changed(self, raw):
         self.spectrogram.set_time_window(float(raw))
         self._time_value.setText(f"{raw} s")
-        self._update_readout()
         if self._reference is not None:
-            # history_length is fixed at construction, so rebuild it to keep
-            # both panels covering the same number of seconds.
-            self._close_reference()
-            self._open_reference()
+            self._ref_rebuild.start()
+        self._update_readout()
 
     def _on_noise_changed(self, raw):
         set_dynamic_range_db(float(raw))
@@ -475,37 +498,68 @@ class VisualizeTab(QtWidgets.QWidget):
 
     def _on_flip_toggled(self, on: bool):
         self.spectrogram.set_velocity_flipped(on)
-        self._update_readout()
+        self._sync_main_view()     # refreshes the orientation tip and readout
 
-    # ── reference comparison view ────────────────────────────────────────────
+    # ── main view: the reference script, or SensDS ──────────────────────────
 
-    def _on_compare_toggled(self, on: bool):
-        if on:
+    def _sync_main_view(self, *_):
+        """
+        Decide which view fills the plot area.
+
+        Infineon SDK: the reference script's live plot is the main view, drawn
+        exactly as written. The SensDS view is optional, beside it for
+        comparison, and the controls that only reach the SensDS view are hidden
+        while it is. STFT has no reference equivalent, so SensDS only.
+        """
+        infineon = self._combo.currentData() == METHOD_INFINEON
+        unavailable = False
+        if infineon:
             self._open_reference()
+            if self._reference is not None and not self._reference.is_ready:
+                # matplotlib missing, or the figure failed to build.
+                self._close_reference()
+                unavailable = True
         else:
             self._close_reference()
+
+        ref_main = self._reference is not None
+        show_sensds = not ref_main or self._alongside_check.isChecked()
+        for w in (self.spectrogram, self._zoom_row, self._sensds_axes,
+                  self._flip_check, self._sensds_image):
+            w.setVisible(show_sensds)
+        self._alongside_check.setVisible(ref_main)
+
+        if ref_main:
+            note = ("The main view is the reference script, drawn exactly as "
+                    "written with its own colors, axes and orientation. Time "
+                    "window and plot size apply to it.")
+            if show_sensds and not self._flip_check.isChecked():
+                note += (" Tick Flip velocity axis to sit the SensDS view the "
+                         "same way up.")
+        elif unavailable:
+            note = ("The reference view could not start (it needs "
+                    "matplotlib), so the SensDS view is shown instead.")
+        else:
+            note = ""
+        self._main_note.setText(note)
+        self._main_note.setVisible(bool(note))
+        self._apply_plot_size()
+        self._update_readout()
+
+    def _reference_history_frames(self) -> int:
+        # Cover the same seconds as the time window, at the radar's frame rate.
+        return max(10, int(round(self.spectrogram.time_window() * 10)))
 
     def _open_reference(self):
         if self._reference is not None:
             return
         from ui.reference_view import ReferenceSpectrogramView
-        # Match the app panel's time span so the two are directly comparable.
-        frames = max(10, int(round(self.spectrogram.time_window() * 10)))
-        self._reference = ReferenceSpectrogramView(history_length=frames)
+        self._reference = ReferenceSpectrogramView(
+            history_length=self._reference_history_frames())
         self._reference.error.connect(self._on_reference_error)
-        # Insert before the trailing stretch so both plots sit side by side.
-        self._plot_row.insertWidget(2, self._reference, 1)
-        if self._reference.is_ready and not self._flip_check.isChecked():
-            self._compare_note.setText(
-                "Tip: the reference draws velocity the other way up. "
-                "Tick 'Flip velocity axis' to match it.\n"
-            )
-        if self._reference.is_ready:
-            self._compare_note.setText(
-                self._compare_note.text() +
-                f"Right plot: reference script, {frames} frames "
-                f"({frames / 10:.0f} s), antenna 0"
-            )
+        # Index 1 is just after the leading stretch: the main view sits on the
+        # left, with the SensDS view beside it when that is switched on.
+        self._plot_row.insertWidget(1, self._reference, 1)
         self.reference_opened.emit()
 
     def _close_reference(self):
@@ -515,29 +569,56 @@ class VisualizeTab(QtWidgets.QWidget):
         self._plot_row.removeWidget(self._reference)
         self._reference.deleteLater()
         self._reference = None
-        self._compare_note.setText("")
+
+    def _rebuild_reference(self):
+        # history_length is fixed at construction, so a new time window means
+        # a new plot. Deferred by _ref_rebuild so a dragged slider rebuilds once.
+        if self._reference is None:
+            return
+        self._close_reference()
+        self._sync_main_view()
 
     def _on_reference_error(self, msg: str):
-        self._compare_note.setText(f"Reference view error: {msg.splitlines()[0]}")
+        self._main_note.setText(f"Reference view error: {msg.splitlines()[0]}")
+        self._main_note.setVisible(True)
 
     def on_raw_frame(self, frame):
         """Radar frames arrive here so the reference view can consume them."""
-        if self._reference is not None:
+        # Frames reach every tab while the radar streams, including while the
+        # Collect tab is open. Processing them for a plot nobody can see costs
+        # about a tenth of a core for nothing.
+        if self._reference is not None and self.isVisible():
             self._reference.on_raw_frame(frame)
 
     def stop_if_running(self):
         """Tear down the reference view's worker thread and figure."""
+        self._ref_rebuild.stop()
         self._close_reference()
 
+    def showEvent(self, event):
+        super().showEvent(event)
+        # The Collect tab can change the method too. Without this the combo,
+        # the SensDS buffer and the main view all stay on the old method, and
+        # SpectrogramWidget.update_frame drops every batch as the wrong shape:
+        # a live view that silently stops moving.
+        method = get_method()
+        if self._combo.currentData() != method:
+            idx = self._combo.findData(method)
+            if idx >= 0:
+                self._combo.setCurrentIndex(idx)     # runs _on_method_changed
+
     def _on_size_changed(self):
+        self._apply_plot_size()
+
+    def _apply_plot_size(self):
         size = self._size_combo.currentData()
         big = 16777215      # Qt's QWIDGETSIZE_MAX
-        if size is None:
-            self.spectrogram.setMaximumSize(big, big)
-        else:
-            # Maximum, not fixed, so the plot still shrinks on a small screen
-            # instead of forcing the window wider than it fits.
-            self.spectrogram.setMaximumSize(size[0], size[1])
+        w, h = (big, big) if size is None else size
+        # Maximum, not fixed, so the plot still shrinks on a small screen
+        # instead of forcing the window wider than it fits.
+        for view in (self.spectrogram, self._reference):
+            if view is not None:
+                view.setMaximumSize(w, h)
 
     def _on_method_changed(self):
         key = self._combo.currentData()
@@ -559,11 +640,6 @@ class VisualizeTab(QtWidgets.QWidget):
             )
         # The noise floor only affects the Infineon color mapping.
         self._noise_lbl_row.setVisible(key == METHOD_INFINEON)
-        # The reference script is the Infineon SDK implementation.
-        self._compare_check.setVisible(key == METHOD_INFINEON)
-        self._compare_note.setVisible(key == METHOD_INFINEON)
-        if key != METHOD_INFINEON and self._compare_check.isChecked():
-            self._compare_check.setChecked(False)
 
         # Nyquist differs slightly between methods; keep the boxes in range.
         max_v = self.spectrogram.max_velocity()
@@ -581,7 +657,28 @@ class VisualizeTab(QtWidgets.QWidget):
         sm = self._smooth_slider.value()
         self._smooth_value.setText("off" if sm == 0 else f"{sm / 10.0:.1f}")
 
+        # The reference script is the Infineon SDK implementation, so the
+        # method also decides which view fills the plot area.
+        self._sync_main_view()
+
     def _update_readout(self):
+        ref = self._reference
+        if ref is not None:
+            from ui.reference_view import (
+                REF_ANTENNA, REF_JET_VMIN, REF_MAX_SPEED_M_S)
+            frames = ref.history_length
+            # Same column layout as the SensDS readout below; kept short
+            # because long lines push the 300 px panel wider than it is.
+            self._readout.setText(
+                f"Drawn by       reference script\n"
+                f"Antenna        {REF_ANTENNA}\n"
+                f"History        {frames} frames ({frames / 10:.0f} s)\n"
+                f"Velocity       +/-{REF_MAX_SPEED_M_S:.2f} m/s\n"
+                f"Color floor    {REF_JET_VMIN:.0f} dB (jet_vmin)\n"
+                f"Redraw         {ref.redraws_per_second:.0f} per second\n"
+                f"Toward radar   below the center"
+            )
+            return
         sp = self.spectrogram
         cps = sp.columns_per_second()
         bins = sp.freq_bins()
@@ -818,6 +915,11 @@ class SpectrogramWidget(pg.GraphicsLayoutWidget):
             col = np.clip(spectrogram_batch[:, i], DB_MIN, DB_MAX).astype(np.float32)
             self._buffer[:, self._col] = col
             self._col = (self._col + 1) % self._width
+        if not self.isVisible():
+            # Keep the buffer current so the view is full the moment it is
+            # shown, but skip the blur and repaint nobody can see. With the
+            # reference as the Infineon main view this one is usually hidden.
+            return
         display = np.roll(self._buffer, -self._col, axis=1)
         # Keep float32 throughout — scipy gaussian_filter handles it natively
         # and avoids the 2× memory + compute cost of a float64 round-trip.

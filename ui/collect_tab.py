@@ -548,7 +548,14 @@ class CollectTab(QtWidgets.QWidget):
         self._preview_plot.setYRange(-MAX_VELOCITY, MAX_VELOCITY, padding=0)
         self._preview_plot.setXRange(0, 3.0, padding=0)
 
-        layout.addWidget(self._preview_widget, 1)   # fills all remaining vertical space
+        # Infineon SDK captures are drawn by the reference script instead (see
+        # _sync_preview_mode). Both share one stack filling the same space; the
+        # reference page is built on first use, so an STFT session never pays
+        # for importing matplotlib.
+        self._preview_stack = QtWidgets.QStackedWidget()
+        self._preview_stack.addWidget(self._preview_widget)
+        self._ref_preview = None
+        layout.addWidget(self._preview_stack, 1)   # fills all remaining vertical space
 
         bottom_row = QtWidgets.QHBoxLayout()
 
@@ -610,20 +617,45 @@ class CollectTab(QtWidgets.QWidget):
         self._flip_check.blockSignals(False)
 
         self._update_capture_note()
+        self._sync_preview_mode()
 
     def _on_capture_setting(self):
         set_method(self._method_combo.currentData())
         set_image_velocity_flipped(self._flip_check.isChecked())
         self._update_capture_note()
+        self._sync_preview_mode()
         self._refresh_counts()
 
     def _update_capture_note(self):
         toward = "below" if self._flip_check.isChecked() else "above"
-        self._capture_note.setText(
+        note = (
             f"Saved as {self._method_combo.currentText()}, with motion toward "
             f"the radar {toward} the center line. The Test tab reads live "
             f"gestures the same way."
         )
+        if self._method_combo.currentData() == METHOD_INFINEON:
+            note += (" The preview is drawn by the reference script; the "
+                     "saved training image uses the app's own coloring.")
+        self._capture_note.setText(note)
+
+    def _sync_preview_mode(self):
+        """
+        Pick how Last Captured Gesture is drawn.
+
+        Infineon SDK captures are drawn by the reference script, the same code
+        as the Visualize tab's main view. STFT has no reference equivalent, so
+        it keeps the app's own plot, and so does Infineon if the reference view
+        cannot be built (matplotlib missing) rather than showing a blank.
+        """
+        if get_method() == METHOD_INFINEON:
+            if self._ref_preview is None:
+                from ui.reference_view import ReferenceRecordedView
+                self._ref_preview = ReferenceRecordedView()
+                self._preview_stack.addWidget(self._ref_preview)
+            if self._ref_preview.is_ready:
+                self._preview_stack.setCurrentWidget(self._ref_preview)
+                return
+        self._preview_stack.setCurrentWidget(self._preview_widget)
 
     def _capture_dir(self):
         """The folder the next capture would write to, or "" if incomplete."""
@@ -845,24 +877,31 @@ class CollectTab(QtWidgets.QWidget):
         write_capture_info(self._save_dir, get_method(),
                            get_image_velocity_flipped())
 
-        # --- Update preview plot ---
-        # Compute the actual gesture duration from the number of radar frames.
-        duration = n_frames * FRAME_TIME_S
-        n_cols_display = display.shape[1]
-        time_scale = duration / n_cols_display
-        max_vel = method_max_velocity()
-        vel_scale = (2 * max_vel) / freq_bins
-        # Mirror the preview too, so what is on screen is what was written to
-        # disk. Negating the scale flips the rows and leaves the axis alone.
-        if get_image_velocity_flipped():
-            vel_scale = -vel_scale
+        # --- Update preview ---
+        self._sync_preview_mode()
+        if self._preview_stack.currentWidget() is self._ref_preview:
+            # Infineon SDK: drawn by the reference script's own offline path
+            # from the raw cube just saved. The heavy part runs off this thread.
+            self._ref_preview.show_capture(raw_cube)
+        else:
+            # Compute the actual gesture duration from the number of radar frames.
+            duration = n_frames * FRAME_TIME_S
+            n_cols_display = display.shape[1]
+            time_scale = duration / n_cols_display
+            max_vel = method_max_velocity()
+            vel_scale = (2 * max_vel) / freq_bins
+            # Mirror the preview too, so what is on screen is what was written
+            # to disk. Negating the scale flips the rows and leaves the axis
+            # alone.
+            if get_image_velocity_flipped():
+                vel_scale = -vel_scale
 
-        self._preview_img.setTransform(
-            QtGui.QTransform().scale(time_scale, vel_scale).translate(0, -freq_bins / 2)
-        )
-        self._preview_img.setImage(display.T, autoLevels=False)
-        self._preview_plot.setXRange(0, duration, padding=0)
-        self._preview_plot.setYRange(-max_vel, max_vel, padding=0)
+            self._preview_img.setTransform(
+                QtGui.QTransform().scale(time_scale, vel_scale).translate(0, -freq_bins / 2)
+            )
+            self._preview_img.setImage(display.T, autoLevels=False)
+            self._preview_plot.setXRange(0, duration, padding=0)
+            self._preview_plot.setYRange(-max_vel, max_vel, padding=0)
 
         self._refresh_counts()
         self._open_folder_btn.setEnabled(True)
