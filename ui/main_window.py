@@ -9,6 +9,7 @@ from ui.gamification import GamificationManager, GamificationBar
 from ui.spectrogram_widget import SpectrogramWidget, VisualizeTab
 from ui.collect_tab import CollectTab
 from ui.analysis_tab import AnalysisTab
+from ui.curve_fit_tab import CurveFitTab
 from ui.train_tab import TrainTab
 from ui.test_tab import TestTab
 from ui.results_tab import ResultsTab
@@ -461,6 +462,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self._pca_tab = self._analysis_tab.pca
         self._tabs.addTab(self._analysis_tab, "🔬   Analysis")
 
+        self._curve_fit_tab = CurveFitTab()
+        self._tabs.addTab(self._curve_fit_tab, "📈   Curve Fit")
+
         self._train_tab = TrainTab()
         self._tabs.addTab(self._train_tab, "🧠   Train")
 
@@ -518,9 +522,9 @@ class MainWindow(QtWidgets.QMainWindow):
         # tabs cannot silently break the soft locks.
         w = self._tabs.widget(index)
 
-        # Always accessible: Visualize, Collect, PCA, Resources.
+        # Always accessible: Visualize, Collect, Analysis, Curve Fit, Resources.
         if w in (self._visualize_tab, self._collect_tab, self._analysis_tab,
-                 self._resources_tab):
+                 self._curve_fit_tab, self._resources_tab):
             return
 
         if w is self._train_tab:
@@ -597,6 +601,9 @@ class MainWindow(QtWidgets.QMainWindow):
         w = self._tabs.widget(index)
         if w is self._visualize_tab:
             self._bridge.start_stream(with_display=True)
+        elif w is self._curve_fit_tab:
+            # Needs the display stream: it keeps its own rolling buffer.
+            self._bridge.start_stream(with_display=True)
         elif w is self._collect_tab:
             self._bridge.start_stream(with_display=False)
         elif w not in (self._test_tab, self._vex_tab):
@@ -647,6 +654,7 @@ class MainWindow(QtWidgets.QMainWindow):
             # frame_ready  → live spectrogram display + VEX AIM display
             self._bridge.frame_ready.connect(self._spectrogram.update_frame)
             self._bridge.frame_ready.connect(self._vex_tab.on_spectrogram_frame)
+            self._bridge.frame_ready.connect(self._curve_fit_tab.on_spectrogram_frame)
             # raw_frame_ready → frame buffers in each tab (always connected,
             # but only arrive when the radar is actively streaming)
             self._bridge.raw_frame_ready.connect(self._visualize_tab.on_raw_frame)
