@@ -659,6 +659,7 @@ class MainWindow(QtWidgets.QMainWindow):
             # but only arrive when the radar is actively streaming)
             self._bridge.raw_frame_ready.connect(self._visualize_tab.on_raw_frame)
             self._bridge.raw_frame_ready.connect(self._collect_tab.on_raw_frame)
+            self._bridge.raw_frame_ready.connect(self._curve_fit_tab.on_raw_frame)
             self._bridge.raw_frame_ready.connect(self._test_tab.on_raw_frame)
             self._bridge.raw_frame_ready.connect(self._vex_tab.on_raw_frame)
             self._bridge.error_occurred.connect(self._on_radar_error)

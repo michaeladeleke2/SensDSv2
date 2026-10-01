@@ -9,6 +9,8 @@ the fitted frequency predicts a pendulum length the student can check against
 the real one with a ruler.
 """
 
+from collections import deque
+
 import numpy as np
 import pyqtgraph as pg
 from PyQt6 import QtCore, QtGui, QtWidgets
@@ -18,9 +20,10 @@ from core.curve_fit import (
     fit_curve, snap_to_peak,
 )
 from core.processing import (
-    FRAME_TIME_S, get_method, method_cols_per_frame, method_freq_bins,
-    method_max_velocity,
+    FRAME_TIME_S, METHOD_INFINEON, get_method, method_cols_per_frame,
+    method_freq_bins, method_max_velocity,
 )
+from core.reference_image import reference_rgb, reference_spectrogram
 from ui import app_colors, _scrollable_left
 from ui.spectrogram_widget import (
     DB_MAX, DB_MIN, DISPLAY_SECONDS, make_jet_colormap,
@@ -28,6 +31,9 @@ from ui.spectrogram_widget import (
 
 TRACE_COLOR = "#ff00ff"
 MIN_TRACE_POINTS = 10
+
+# Raw frames kept for the reference drawing: one window's worth.
+FRAME_WINDOW = int(round(DISPLAY_SECONDS / FRAME_TIME_S))
 
 
 def _curve_fit_style(c: dict) -> str:
@@ -120,6 +126,8 @@ class CurveFitTab(QtWidgets.QWidget):
         self._col = 0
         self._frozen = False
         self._frozen_spec = None
+        self._reference_frozen = False
+        self._raw_frames = deque(maxlen=FRAME_WINDOW)
         self._tracing = False
         self._drawing = False
         self._points = []
@@ -161,6 +169,12 @@ class CurveFitTab(QtWidgets.QWidget):
             self._buffer[:, self._col] = np.clip(batch[:, i], DB_MIN, DB_MAX)
             self._col = (self._col + 1) % self._width
         self._refresh_image()
+
+    def on_raw_frame(self, frame):
+        """Raw frames, kept so Freeze can redraw the window the reference way."""
+        if self._frozen:
+            return
+        self._raw_frames.append(np.array(frame, copy=True))
 
     def _display_array(self):
         """The buffer in display order, oldest column first."""
@@ -289,6 +303,12 @@ class CurveFitTab(QtWidgets.QWidget):
 
         self._plot_widget = pg.GraphicsLayoutWidget()
         self._plot_widget.setBackground('#00008F')
+        # Fifty columns across a wide plot; without this they draw as hard
+        # blocks, where matplotlib (and so the reference drawing) interpolates.
+        self._plot_widget.setRenderHint(
+            QtGui.QPainter.RenderHint.SmoothPixmapTransform, True)
+        self._plot_widget.setRenderHint(
+            QtGui.QPainter.RenderHint.Antialiasing, True)
         self._plot = self._plot_widget.addPlot()
         self._plot.setLabel('left', 'Velocity', units='m/s')
         self._plot.setLabel('bottom', 'Time', units='s')
@@ -364,16 +384,61 @@ class CurveFitTab(QtWidgets.QWidget):
 
     def _freeze(self):
         self._frozen = True
-        self._frozen_spec = self._display_array()
-        self._spec_heading.setText("Frozen Spectrogram")
+        self._reference_frozen = False
+        if get_method() == METHOD_INFINEON and self._raw_frames:
+            # About a second over a full window, on the GUI thread. Say so
+            # first, and take the button out of reach, rather than look hung.
+            self._freeze_btn.setEnabled(False)
+            self._set_status("Drawing the frozen window the reference way...")
+            QtWidgets.QApplication.processEvents()
+            self._reference_frozen = self._draw_reference_frozen()
+        if not self._reference_frozen:
+            self._frozen_spec = self._display_array()
+            self._refresh_image()
+        self._spec_heading.setText(
+            "Frozen Spectrogram (reference script)" if self._reference_frozen
+            else "Frozen Spectrogram (app view)")
         self._sync_buttons()
         self._set_status("Frozen. Start Trace, then drag across the curve.")
+
+    def _draw_reference_frozen(self) -> bool:
+        """
+        Redraw the frozen window the way the reference script draws it.
+
+        Far too slow to run live, about 0.6 s over a full window, but on freeze
+        it costs nothing and the picture being traced is then the same one the
+        model learns from. Rows are flipped so his orientation, the most
+        negative velocity on top, lands the same way on this plot, and the
+        spectrogram kept for snapping is flipped with it so a traced point and
+        the bin it snaps to agree with what is on screen.
+        """
+        try:
+            frames = np.stack([np.asarray(f) for f in self._raw_frames])
+            if frames.ndim == 3:
+                frames = frames[:, np.newaxis]
+            spec = reference_spectrogram(frames)           # (n_frame, bins)
+            missing = self._width - spec.shape[0]
+            if missing > 0:
+                spec = np.vstack([np.full((missing, spec.shape[1]),
+                                          float(spec.min())), spec])
+            elif missing < 0:
+                spec = spec[-self._width:]
+            rgb = reference_rgb(spec)[::-1]
+            self._img.setImage(np.ascontiguousarray(rgb.transpose(1, 0, 2)))
+            self._frozen_spec = np.ascontiguousarray(spec.T[::-1])
+            return True
+        except Exception as e:
+            self._set_status(f"Reference drawing unavailable: {e}", error=True)
+            return False
 
     def _resume(self):
         self._frozen = False
         self._frozen_spec = None
+        self._reference_frozen = False
         if self._trace_btn.isChecked():
             self._trace_btn.setChecked(False)
+        self._img.setLevels([DB_MIN, DB_MAX])
+        self._refresh_image()
         self._spec_heading.setText("Live Spectrogram")
         self._sync_buttons()
         self._set_status("Live.")

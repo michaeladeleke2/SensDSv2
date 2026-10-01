@@ -304,6 +304,88 @@ def test_main_window_places_curve_fit_after_analysis_and_feeds_it():
         win._visualize_tab.stop_if_running()
 
 
+def _raw_frames(n=12, seed=5):
+    """Frames shaped like the radar's, so the Doppler axis comes out at 512."""
+    rng = np.random.default_rng(seed)
+    frames = rng.standard_normal((n, 3, 128, 64)).astype(np.float32)
+    s = np.arange(64)[None, None, None, :]
+    c = np.arange(128)[None, None, :, None]
+    t = np.arange(n)[:, None, None, None]
+    frames += 6.0 * np.cos(2 * np.pi * (0.1 * s + 0.01 * (1 + t) * c))
+    return frames
+
+
+def test_freezing_draws_the_reference_image_for_infineon():
+    from core import processing as P
+    from core import reference_image as R
+    from ui.curve_fit_tab import CurveFitTab
+    P.set_method(P.METHOD_INFINEON)
+    try:
+        tab = CurveFitTab()
+        frames = _raw_frames()
+        for frame in frames:
+            tab.on_raw_frame(frame)
+        tab._freeze()
+        assert tab._reference_frozen, tab._status.text()
+
+        img = tab._img.image
+        assert img.ndim == 3 and img.shape[2] == 3, "not an RGB image"
+        assert img.shape[0] == tab._width, "one column per frame expected"
+
+        spec = R.reference_spectrogram(frames)
+        pad = np.full((tab._width - spec.shape[0], spec.shape[1]),
+                      float(spec.min()))
+        spec = np.vstack([pad, spec])
+        assert np.array_equal(img, R.reference_rgb(spec)[::-1].transpose(1, 0, 2))
+        # Snapping reads this array by velocity, so it has to carry the same
+        # flip as the picture or points snap to its mirror image.
+        assert np.array_equal(tab._frozen_spec, spec.T[::-1])
+    finally:
+        P.set_method(P.METHOD_STFT)
+
+
+def test_stft_freeze_falls_back_to_the_app_drawing():
+    from core import processing as P
+    from ui.curve_fit_tab import CurveFitTab
+    P.set_method(P.METHOD_STFT)
+    tab = CurveFitTab()
+    for frame in _raw_frames(4):
+        tab.on_raw_frame(frame)
+    tab._freeze()
+    assert not tab._reference_frozen
+    assert tab._img.image.ndim == 2
+    assert "app view" in tab._spec_heading.text()
+
+
+def test_resume_returns_to_the_live_drawing():
+    from core import processing as P
+    from ui.curve_fit_tab import CurveFitTab
+    P.set_method(P.METHOD_INFINEON)
+    try:
+        tab = CurveFitTab()
+        for frame in _raw_frames():
+            tab.on_raw_frame(frame)
+        tab._freeze()
+        assert tab._img.image.ndim == 3
+        tab._resume()
+        assert tab._img.image.ndim == 2, "live view should be the app drawing"
+        assert not tab._reference_frozen
+        assert tab._spec_heading.text() == "Live Spectrogram"
+    finally:
+        P.set_method(P.METHOD_STFT)
+
+
+def test_raw_frames_stop_arriving_while_frozen():
+    from ui.curve_fit_tab import CurveFitTab
+    tab = CurveFitTab()
+    for frame in _raw_frames(4):
+        tab.on_raw_frame(frame)
+    held = len(tab._raw_frames)
+    tab._freeze()
+    tab.on_raw_frame(_raw_frames(1)[0])
+    assert len(tab._raw_frames) == held
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):
