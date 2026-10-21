@@ -50,10 +50,17 @@ SensDSv2/
 │   └── SensDSLogo.icns          # macOS icon
 ├── core/
 │   ├── radar.py                 # Radar connection and streaming
-│   └── processing.py            # Signal processing pipeline
+│   ├── processing.py            # Signal processing pipeline
+│   ├── curve_fit.py             # Curve Fit models, Auto Fit tracing and peaks
+│   ├── curve_explain.py         # The fit result in words for students
+│   ├── range_map.py             # Range map settings; imports the two scripts
+│   ├── range_map_v1.py          # range map script (exact copy)
+│   └── range_map_live.py        # live range map script (exact copy)
 └── ui/
     ├── main_window.py           # Main application window and tab container
-    ├── spectrogram_widget.py    # Live spectrogram display
+    ├── spectrogram_widget.py    # Live spectrogram display (Visualize tab)
+    ├── range_map_view.py        # Live range map, drawn by range_map_live.py
+    ├── curve_fit_tab.py         # Curve Fit tab
     ├── collect_tab.py           # Gesture data collection
     ├── train_tab.py             # ViT model training
     └── test_tab.py              # Model testing and robot simulation
@@ -116,6 +123,20 @@ SensDSv2/
 - Gesture → robot mapping: swipe_left = turn left, swipe_right = turn right, push = speed burst, idle = no change
 - Confidence bars show per-class probabilities after each prediction
 - All inference runs on QThread
+
+### Range map (Visualize tab)
+- **View** switches the Visualize tab between the Doppler spectrogram and the **Range map**: how far away things are (0 to 3.48 m, 512 bins) over time
+- Drawn by `range_map_live.py` itself; `core/range_map_v1.py` and `core/range_map_live.py` are exact copies of the two scripts (tests check their hashes) and `core/range_map.py` only imports them
+- **MTI filter (show only moving things)** turns MTI on and off; it starts off. `RANGE_MAP_MODE` in `core/range_map.py`, or the `SENSDS_RANGE_MODE` environment variable (`mti` or `raw`), sets the starting value
+- **Distance shown (Y)**: From / To in metres. Only the bins inside are drawn and the colours are scaled to them
+- MTI and the distance are shared with the Curve Fit tab
+
+### Curve Fit
+- **Picture**: the Doppler spectrogram (speed) or the range map (distance, with the same MTI and distance controls)
+- **Auto Fit** freezes, finds the strongest signal in each moment (on the spectrogram the louder of toward and away, ignoring the still band within 0.1 m/s), marks the high ▲ and low ▼ peaks and fits the chosen model starting from them
+- Models: Sinusoid, Damped sinusoid, **Exponential** (y = A·e^(k·t) + c), Polynomial, Linear
+- The result panel shows the fit quality (Excellent / Good / Fair / Poor with R²), the general equation and the one with the fitted numbers, a card per letter with its meaning, what the fit predicts (period and pendulum length, or time constant and half-life) and what the peaks show
+- The Infineon picture's velocity axis is the reference script's ±4.11 m/s (the 0.3 ms chirp)
 
 ## Concepts Reference
 

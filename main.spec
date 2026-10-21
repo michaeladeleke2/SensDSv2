@@ -104,6 +104,9 @@ hiddenimports += [
     'scipy.signal.windows',
     'scipy.ndimage',
     'matplotlib.backends.backend_qtagg',
+    # The range map scripts, imported inside methods (core/range_map.py)
+    'core.range_map', 'core.range_map_v1', 'core.range_map_live',
+    'core.curve_explain', 'ui.range_map_view',
     'ifxradarsdk',
     'ifxradarsdk.fmcw',
     'ifxradarsdk.fmcw.types',

@@ -386,6 +386,175 @@ def test_raw_frames_stop_arriving_while_frozen():
     assert len(tab._raw_frames) == held
 
 
+# ── team feedback: exponential, Auto Fit, the range map, the student panel ──
+
+def test_exponential_recovers_decay_and_growth():
+    for A, k, c in ((0.8, -0.5, 0.1), (0.05, 0.3, -0.2), (1.5, -0.8, 1.0)):
+        t = 2 + 0.08 * np.arange(60)
+        v = A * np.exp(k * t) + c + 0.002 * np.sin(41 * t)
+        r = CF.fit_curve(list(zip(t, v)), CF.MODEL_EXP)
+        assert r.ok, r.message
+        A2, k2, c2 = r.params
+        assert abs(A2 - A) < 0.03 * max(1, abs(A)) and abs(k2 - k) < 0.03 and abs(c2 - c) < 0.03
+        assert r.r_squared > 0.99
+        assert ("Half-life" if k < 0 else "Doubling time") in r.physics
+
+
+def test_range_quantity_writes_r_of_t_in_metres():
+    t = 0.1 * np.arange(50)
+    v = 1.2 + 0.1 * np.sin(2 * np.pi * 0.6 * t + 0.4)
+    r = CF.fit_curve(list(zip(t, v)), CF.MODEL_SINUSOID, quantity="range")
+    assert r.ok and r.equation.startswith("r(t) = ") and r.param_text.endswith("c = 1.2 m")
+    assert abs(r.params[1] - 0.6) < 1e-6
+
+
+def _ridge(fn, rows=512, cols=80, ts=0.1, scale=2 * 4.112380411522634 / 512, offset=256, gaps=()):
+    rng = np.random.default_rng(3)
+    spec = -80 + 4 * rng.standard_normal((rows, cols))
+    for c in range(cols):
+        if c in gaps:
+            continue
+        row = int(round(fn((c + 0.5) * ts) / scale + offset))
+        for d in range(-2, 3):
+            if 0 <= row + d < rows:
+                spec[row + d, c] = -20 - 3 * abs(d)
+    return spec
+
+
+def test_auto_trace_follows_the_ridge_and_skips_empty_columns():
+    fn = lambda t: 1.5 * np.sin(2 * np.pi * 0.5 * t)
+    scale = 2 * 4.112380411522634 / 512
+    pts = CF.auto_trace(_ridge(fn, gaps=(10, 11, 12)), 0.1, scale, row_offset=256,
+                        y_range=(-3, 3), dead_zone=0.1)
+    assert 60 <= len(pts) <= 77
+    assert not any(abs(t - 1.15) < 0.01 for t, _ in pts)
+    for t, v in pts:
+        assert abs(v - fn(t)) < 0.05 or abs(fn(t)) < 0.15
+    r = CF.fit_curve(pts, CF.MODEL_SINUSOID)
+    assert abs(r.params[1] - 0.5) < 0.01 and r.r_squared > 0.98
+
+
+def test_auto_trace_on_a_range_map_keeps_to_the_distance_shown():
+    step = 0.0068
+    fn = lambda t: 1.0 + 0.15 * np.sin(2 * np.pi * 0.7 * t)
+    spec = _ridge(fn, scale=step, offset=0)
+    spec[int(round(0.3 / step)), :] = -5.0          # a stronger still reflector
+    pts = CF.auto_trace(spec, 0.1, step, row_offset=0, y_range=(0.6, 2.0))
+    assert len(pts) > 70 and all(abs(v - fn(t)) < 0.02 for t, v in pts)
+    near = CF.auto_trace(spec, 0.1, step, row_offset=0, y_range=(0.0, 3.48))
+    assert all(abs(v - 0.3) < 0.01 for _, v in near)
+
+
+def test_snap_to_peak_on_a_range_axis():
+    spec = _ridge(lambda t: 1.0, rows=300, cols=20, scale=0.01, offset=0)
+    out = CF.snap_to_peak([(0.55, 1.08), (1.05, 0.93)], spec, 0.1, 0.01, row_offset=0)
+    assert all(abs(v - 1.0) < 1e-9 for _, v in out)
+
+
+def test_peaks_give_the_swing_and_the_decay():
+    f, A, c, phi = 0.8, 0.6, 0.2, 0.9
+    t = 0.05 * np.arange(120)
+    v = A * np.sin(2 * np.pi * f * t + phi) + c + 0.02 * np.sin(37 * t)
+    peaks = CF.find_peaks(t, v)
+    assert len(peaks["positive"]) >= 4 and len(peaks["negative"]) >= 4
+    signs = [p[2] for p in peaks["all"]]
+    assert all(a != b for a, b in zip(signs, signs[1:])), "peaks alternate"
+    s = CF.peak_start(CF.MODEL_SINUSOID, peaks)
+    assert abs(s[1] - f) < 0.05 and abs(s[0] - A) < 0.08 and abs(s[3] - c) < 0.05
+    vd = A * np.exp(-t / 2.5) * np.sin(2 * np.pi * f * t + phi)
+    sd = CF.peak_start(CF.MODEL_DAMPED, CF.find_peaks(t, vd))
+    assert abs(sd[1] - 2.5) < 0.4
+    assert CF.peak_start(CF.MODEL_EXP, peaks) is None
+
+
+def test_every_letter_is_explained():
+    from core.curve_explain import explain_fit, explain_peaks, fit_quality, g
+    t = 0.05 * np.arange(80)
+    wave = lambda tau: 0.5 * np.exp(-t / tau) * np.sin(2 * np.pi * 0.9 * t + 0.3) + 0.05
+    cases = [(CF.MODEL_SINUSOID, wave(1e9), ["A", "f", "φ", "c"]),
+             (CF.MODEL_DAMPED, wave(3), ["A", "τ", "f", "φ", "c"]),
+             (CF.MODEL_EXP, 0.5 * np.exp(-t / 1.5) + 0.05, ["A", "k", "c"]),
+             (CF.MODEL_LINEAR, 0.3 * t + 0.1, ["a1", "a0"]),
+             (CF.MODEL_POLYNOMIAL, 0.2 * t ** 2 - t + 0.5, ["a2", "a1", "a0"])]
+    for model, v, letters in cases:
+        r = CF.fit_curve(list(zip(t, v)), model)
+        assert r.ok, (model, r.message)
+        x = explain_fit(r)
+        import re
+        assert [re.sub(r"<[^>]+>", "", p["sym"]) for p in x["params"]] == letters
+        for p in x["params"]:
+            assert p["name"] and p["meaning"] and p["unit"]
+        assert x["general"].startswith("<i>v</i>(<i>t</i>)")
+        if model in (CF.MODEL_SINUSOID, CF.MODEL_DAMPED):
+            assert any(q["name"] == "Pendulum length" for q in x["results"])
+    assert fit_quality(0.97) == ("Excellent fit", "ok") and fit_quality(0.3)[1] == "bad"
+    assert g(32412.7) == "32,400" and g(-0.0000123) == "−1.23 × 10<sup>−5</sup>" and g(-0.691) == "−0.691"
+    peaks = CF.find_peaks(t, wave(1e9))
+    assert "high peak" in explain_peaks(peaks, "m/s")
+
+
+def test_the_tab_auto_fits_the_frozen_spectrogram_and_shows_cards():
+    from core import processing as P
+    from ui.curve_fit_tab import CurveFitTab
+    P.set_method(P.METHOD_STFT)
+    tab = CurveFitTab()
+    tab.resize(1300, 850)
+    tab.show()
+    APP.processEvents()
+    # A ridge in the app's own buffer, row 0 the most negative velocity
+    fn = lambda t: 1.5 * np.sin(2 * np.pi * 0.6 * t)
+    for col in range(tab._width):
+        column = np.full(tab._freq_bins, -60.0, dtype=np.float32)
+        row = int(round(fn((col + 0.5) * tab._time_scale) / tab._vel_scale + tab._freq_bins / 2))
+        column[max(0, row - 2):row + 3] = -5.0
+        tab.on_spectrogram_frame(column[:, None])
+    tab._auto_fit()
+    assert tab.is_frozen() and tab._auto
+    assert "Auto Fit" in tab._status.text(), tab._status.text()
+    assert tab._peaks and tab._peaks["positive"] and tab._peaks["negative"]
+    body = tab._results_area.widget()
+    texts = " ".join(l.text() for l in body.findChildren(QtWidgets.QLabel))
+    for word in ("Your fitted curve", "AMPLITUDE", "FREQUENCY", "PENDULUM LENGTH", "high peak"):
+        assert word in texts, word
+    # Drawing by hand afterwards replaces what Auto Fit found
+    tab._trace_btn.setChecked(True)
+    tab._add_point(QtCore.QPointF(200, 150))
+    assert not tab._auto and len(tab._points) == 1
+    tab.shutdown()
+    tab.hide()
+
+
+def test_the_tab_draws_the_range_map_with_the_distance_shown():
+    from core import range_map as RM
+    from ui.curve_fit_tab import CurveFitTab
+    tab = CurveFitTab()
+    tab.show()
+    APP.processEvents()
+    try:
+        assert tab._range_opts.isHidden()
+        tab._kind_combo.setCurrentIndex(tab._kind_combo.findData("range"))
+        APP.processEvents()
+        assert tab._kind == "range" and not tab._range_opts.isHidden()
+        assert tab._range_worker is not None
+        hist = np.full((50, 512), -60.0)
+        hist[:, 150] = -10.0
+        tab._on_range_history(hist, 50, 50)
+        assert tab._img.image.shape == (50, 512, 3)
+        RM.set_settings(min_m=0.5, max_m=1.5)
+        APP.processEvents()
+        lo, hi = tab._plot.vb.viewRange()[1]
+        assert abs(lo - 0.5) < 1e-6 and abs(hi - 1.5) < 1e-6
+        tab._freeze()
+        assert tab._frozen_spec.shape == (512, 50), "rows from the nearest bin"
+        tab._kind_combo.setCurrentIndex(tab._kind_combo.findData("doppler"))
+        APP.processEvents()
+        assert tab._range_worker is None and not tab.is_frozen()
+    finally:
+        tab.shutdown()
+        RM.set_settings(mti=False, min_m=0.0, max_m=RM.RANGE_MAX_M)
+        tab.hide()
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):

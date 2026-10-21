@@ -28,8 +28,10 @@ APP = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
 
 from core import processing as P
 
+# The reference script as amended by the visualization change note (new
+# chirp, MIN_RANGE_BIN, the fixed -50 dB colour floor); unedited since.
 VENDORED_SHA256 = (
-    "5138ad8cb5b6d1c9889c0d6062196556cddbdbf1ba441fed283dfc9cfebb1b8c"
+    "04574e9b8c661ab7150d9478d67b98060c3ebcff74abde7884e796d23c8fc83d"
 )
 
 

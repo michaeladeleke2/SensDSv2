@@ -130,7 +130,12 @@ def test_reduce_noise_follows_the_option():
 
 
 def test_reduce_noise_keeps_a_still_scene_dark():
-    """Idle as measured: a clutter line near -38 dB over noise near -58 dB."""
+    """Idle as measured: a clutter line near -38 dB over noise near -58 dB.
+
+    Since the change note the floor is fixed (no 40 dB fallback below the
+    peak), so idle stays dark at the app's -50 dB floor, with only the clutter
+    line lit.
+    """
     from matplotlib import colormaps
     rng = np.random.default_rng(0)
     spec = -58.0 + rng.normal(0.0, 2.0, (20, 512))
@@ -140,10 +145,11 @@ def test_reduce_noise_keeps_a_still_scene_dark():
     def dark_fraction(rgb):
         return float(np.mean(np.all(rgb == darkest, axis=-1)))
 
-    assert dark_fraction(R.reference_rgb(spec, jet_vmin=-20.0)) < 0.2, (
-        "the reference default should show idle as noise")
-    assert dark_fraction(R.reference_rgb(spec, jet_vmin=-50.0)) > 0.9, (
-        "Reduce noise should leave idle dark but for the clutter line")
+    assert R.REF_JET_VMIN == -50.0
+    assert dark_fraction(R.reference_rgb(spec, jet_vmin=R.REF_JET_VMIN)) > 0.9, (
+        "the app's floor should leave idle dark but for the clutter line")
+    assert dark_fraction(R.reference_rgb(spec, jet_vmin=-50.0)) < 1.0, (
+        "the clutter line should still show")
 
 
 def test_folders_drawn_the_old_way_are_flagged():
@@ -159,8 +165,14 @@ def test_folders_drawn_the_old_way_are_flagged():
         write_capture_info(d, P.METHOD_INFINEON, True)
         assert capture_mismatch(d, P.METHOD_INFINEON, True) == ""
 
+        # Reduce noise only matters when it moves the floor; since the change
+        # note both floors are -50 dB, so it no longer makes folders differ.
         R.set_reduce_noise(True)
-        assert "Reduce noise" in capture_mismatch(d, P.METHOD_INFINEON, True)
+        expected = "Reduce noise" if R.REDUCED_NOISE_JET_VMIN != R.REF_JET_VMIN else ""
+        if expected:
+            assert expected in capture_mismatch(d, P.METHOD_INFINEON, True)
+        else:
+            assert capture_mismatch(d, P.METHOD_INFINEON, True) == ""
     finally:
         shutil.rmtree(d)
         _restore()

@@ -13,6 +13,7 @@ from core.processing import (
     get_dynamic_range_db, set_dynamic_range_db,
 )
 from ui import app_colors, _scrollable_left, zoom_button_row
+from core import range_map as RM
 
 DISPLAY_SECONDS = 5   # seconds of rolling history to show
 
@@ -156,6 +157,7 @@ class VisualizeTab(QtWidgets.QWidget):
         self.setStyleSheet(_viz_style(self._c))
 
         self._reference = None
+        self._range_view = None
 
         # Built first: the panel reads its slider limits off the widget.
         self.spectrogram = SpectrogramWidget()
@@ -197,6 +199,7 @@ class VisualizeTab(QtWidgets.QWidget):
 
         self._sync_method_widgets()
         self._update_readout()
+        RM.on_settings_changed(self._on_range_settings)
 
     # ── panel ────────────────────────────────────────────────────────────────
 
@@ -212,8 +215,22 @@ class VisualizeTab(QtWidgets.QWidget):
         layout.addWidget(heading)
         layout.addWidget(self._divider())
 
+        # ── view: Doppler spectrogram or range map ───────────────────────────
+        layout.addWidget(self._lbl("View"))
+        self._view_combo = QtWidgets.QComboBox()
+        self._view_combo.addItem("Doppler spectrogram", "doppler")
+        self._view_combo.addItem("Range map", "range")
+        self._view_combo.setToolTip(
+            "Doppler spectrogram: speed toward or away from the radar over time.\n"
+            "Range map: how far away things are over time (range_map_live.py).")
+        self._view_combo.currentIndexChanged.connect(self._on_view_changed)
+        layout.addWidget(self._view_combo)
+        layout.addWidget(self._build_range_opts())
+        layout.addWidget(self._divider())
+
         # ── method ───────────────────────────────────────────────────────────
-        layout.addWidget(self._lbl("Spectrogram Method"))
+        self._method_lbl = self._lbl("Spectrogram Method")
+        layout.addWidget(self._method_lbl)
         self._combo = QtWidgets.QComboBox()
         current = get_method()
         for i, (key, label, tip) in enumerate(self._METHODS):
@@ -429,6 +446,75 @@ class VisualizeTab(QtWidgets.QWidget):
 
         return _scrollable_left(panel, width=300)
 
+    def _build_range_opts(self):
+        """MTI on or off and the distance shown, for the range map (shared with Curve Fit)."""
+        box = QtWidgets.QWidget()
+        lay = QtWidgets.QVBoxLayout(box)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(6)
+        desc = QtWidgets.QLabel(f"512 range bins, 0 to {RM.RANGE_MAX_M} m")
+        desc.setObjectName("desc")
+        lay.addWidget(desc)
+        self._mti_check = QtWidgets.QCheckBox("MTI filter (show only moving things)")
+        self._mti_check.setToolTip(
+            "MTI (moving target indication) removes everything that stands still,\n"
+            "such as walls and furniture, so only moving things show up.\n"
+            "Off: the raw range profile, still objects included.\n"
+            "Changing it restarts the picture.")
+        self._mti_check.toggled.connect(lambda on: RM.set_settings(mti=on))
+        lay.addWidget(self._mti_check)
+        name = QtWidgets.QLabel("Distance shown (Y)")
+        name.setObjectName("param_name")
+        lay.addWidget(name)
+        row = QtWidgets.QHBoxLayout()
+        row.setSpacing(6)
+        tip = ("The part of the range axis to draw, in metres from the radar\n"
+               f"(0 to {RM.RANGE_MAX_M} m). The colours are scaled to what is inside it.")
+        self._dist_from = self._vel_spin(0.0, RM.RANGE_MAX_M - 0.1, 0.0, tip)
+        self._dist_to = self._vel_spin(0.1, RM.RANGE_MAX_M, RM.RANGE_MAX_M, tip)
+        for label, spin in (("From", self._dist_from), ("To", self._dist_to)):
+            cap = QtWidgets.QLabel(label)
+            cap.setObjectName("desc")
+            row.addWidget(cap)
+            row.addWidget(spin, 1)
+        reset = QtWidgets.QPushButton("Reset")
+        reset.setObjectName("preset_btn")
+        reset.setToolTip(f"Show the whole range, 0 to {RM.RANGE_MAX_M} m")
+        reset.clicked.connect(lambda: RM.set_settings(min_m=0.0, max_m=RM.RANGE_MAX_M))
+        row.addWidget(reset)
+        lay.addLayout(row)
+        apply = lambda _=None: RM.set_settings(min_m=self._dist_from.value(), max_m=self._dist_to.value())
+        self._dist_from.valueChanged.connect(apply)
+        self._dist_to.valueChanged.connect(apply)
+        self._range_opts = box
+        self._sync_range_inputs()
+        return box
+
+    def _sync_range_inputs(self):
+        s = RM.get_settings()
+        for w, v in ((self._mti_check, s["mti"]), (self._dist_from, s["min"]), (self._dist_to, s["max"])):
+            w.blockSignals(True)
+            if isinstance(w, QtWidgets.QCheckBox):
+                w.setChecked(v)
+            else:
+                w.setValue(v)
+            w.blockSignals(False)
+
+    def _on_range_settings(self, settings, changed):
+        try:
+            self._sync_range_inputs()
+        except RuntimeError:
+            RM.remove_listener(self._on_range_settings)
+            return
+        if changed["mti"] and self._range_view is not None:
+            self._close_range()          # a new mode means a new processor
+            self._sync_main_view()
+        else:
+            self._update_readout()
+
+    def _on_view_changed(self, _=None):
+        self._sync_main_view()
+
     def _slider_row(self, parent_layout, title, lo, hi, init, tip,
                     on_change, scale=1.0, suffix=""):
         """Label + value readout + slider. Returns (slider, value_label)."""
@@ -501,7 +587,7 @@ class VisualizeTab(QtWidgets.QWidget):
     def _on_time_changed(self, raw):
         self.spectrogram.set_time_window(float(raw))
         self._time_value.setText(f"{raw} s")
-        if self._reference is not None:
+        if self._reference is not None or self._range_view is not None:
             self._ref_rebuild.start()
         self._update_readout()
 
@@ -528,9 +614,17 @@ class VisualizeTab(QtWidgets.QWidget):
         comparison, and the controls that only reach the SensDS view are hidden
         while it is. STFT has no reference equivalent, so SensDS only.
         """
+        range_view = self._view_combo.currentData() == "range"
         infineon = self._combo.currentData() == METHOD_INFINEON
         unavailable = False
-        if infineon:
+        if range_view:
+            self._close_reference()
+            self._open_range()
+            if self._range_view is not None and not self._range_view.is_ready:
+                self._close_range()
+                unavailable = True
+        elif infineon:
+            self._close_range()
             self._open_reference()
             if self._reference is not None and not self._reference.is_ready:
                 # matplotlib missing, or the figure failed to build.
@@ -538,18 +632,24 @@ class VisualizeTab(QtWidgets.QWidget):
                 unavailable = True
         else:
             self._close_reference()
+            self._close_range()
 
         ref_main = self._reference is not None
-        show_sensds = not ref_main or self._alongside_check.isChecked()
+        range_main = self._range_view is not None
+        show_sensds = (not ref_main and not range_main) or (ref_main and self._alongside_check.isChecked())
         for w in (self.spectrogram, self._zoom_row, self._sensds_axes,
                   self._flip_check, self._sensds_image):
             w.setVisible(show_sensds)
+        for w in (self._method_lbl, self._combo, self._desc):
+            w.setVisible(not range_view)
+        self._range_opts.setVisible(range_view)
         self._alongside_check.setVisible(ref_main)
-        self._ref_noise_check.setVisible(ref_main)
+        self._ref_noise_check.setVisible(ref_main or range_main)
 
         if unavailable:
-            note = ("The reference view could not start (it needs "
-                    "matplotlib), so the SensDS view is shown instead.")
+            note = ("The %s could not start (it needs matplotlib), so the "
+                    "SensDS view is shown instead."
+                    % ("range map" if range_view else "reference view"))
         else:
             note = ""
         self._main_note.setText(note)
@@ -575,6 +675,22 @@ class VisualizeTab(QtWidgets.QWidget):
         self._plot_row.insertWidget(1, self._reference, 1)
         self.reference_opened.emit()
 
+    def _open_range(self):
+        if self._range_view is not None:
+            return
+        from ui.range_map_view import RangeMapView
+        self._range_view = RangeMapView(history_length=self._reference_history_frames())
+        self._range_view.error.connect(self._on_reference_error)
+        self._plot_row.insertWidget(1, self._range_view, 1)
+
+    def _close_range(self):
+        if self._range_view is None:
+            return
+        self._range_view.shutdown()
+        self._plot_row.removeWidget(self._range_view)
+        self._range_view.deleteLater()
+        self._range_view = None
+
     def _close_reference(self):
         if self._reference is None:
             return
@@ -586,9 +702,10 @@ class VisualizeTab(QtWidgets.QWidget):
     def _rebuild_reference(self):
         # history_length is fixed at construction, so a new time window means
         # a new plot. Deferred by _ref_rebuild so a dragged slider rebuilds once.
-        if self._reference is None:
+        if self._reference is None and self._range_view is None:
             return
         self._close_reference()
+        self._close_range()
         self._sync_main_view()
 
     def _on_ref_noise_toggled(self, on: bool):
@@ -597,6 +714,7 @@ class VisualizeTab(QtWidgets.QWidget):
         # jet_vmin is fixed when the reference plot is built, so rebuild it.
         if self._reference is not None:
             self._close_reference()
+        self._close_range()
         self._sync_main_view()
 
     def _on_reference_error(self, msg: str):
@@ -610,11 +728,14 @@ class VisualizeTab(QtWidgets.QWidget):
         # about a tenth of a core for nothing.
         if self._reference is not None and self.isVisible():
             self._reference.on_raw_frame(frame)
+        if self._range_view is not None and self.isVisible():
+            self._range_view.on_raw_frame(frame)
 
     def stop_if_running(self):
         """Tear down the reference view's worker thread and figure."""
         self._ref_rebuild.stop()
         self._close_reference()
+        self._close_range()
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -631,6 +752,7 @@ class VisualizeTab(QtWidgets.QWidget):
         from core.reference_image import get_reduce_noise
         if self._ref_noise_check.isChecked() != get_reduce_noise():
             self._ref_noise_check.setChecked(get_reduce_noise())  # rebuilds
+        self._sync_range_inputs()
 
     def _on_size_changed(self):
         self._apply_plot_size()
@@ -641,7 +763,7 @@ class VisualizeTab(QtWidgets.QWidget):
         w, h = (big, big) if size is None else size
         # Maximum, not fixed, so the plot still shrinks on a small screen
         # instead of forcing the window wider than it fits.
-        for view in (self.spectrogram, self._reference):
+        for view in (self.spectrogram, self._reference, self._range_view):
             if view is not None:
                 view.setMaximumSize(w, h)
 
@@ -687,6 +809,21 @@ class VisualizeTab(QtWidgets.QWidget):
         self._sync_main_view()
 
     def _update_readout(self):
+        rv = self._range_view
+        if rv is not None:
+            s = RM.get_settings()
+            frames = rv.history_length
+            self._readout.setText(
+                f"Drawn by       range_map_live.py\n"
+                f"Antenna        {RM.ANTENNA}\n"
+                f"Mode           {'MTI (moving only)' if rv.mode == 'mti' else 'raw (no MTI)'}\n"
+                f"History        {frames} frames ({frames / 10:.0f} s)\n"
+                f"Range          0 to {RM.RANGE_MAX_M} m, 512 bins\n"
+                f"Shown          {s['min']:.2f} to {s['max']:.2f} m\n"
+                f"Color floor    {rv.jet_vmin:.0f} dB (jet_vmin)\n"
+                f"Redraw         {rv.redraws_per_second:.0f} per second"
+            )
+            return
         ref = self._reference
         if ref is not None:
             from core.reference_image import REF_ANTENNA, REF_MAX_SPEED_M_S

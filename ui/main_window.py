@@ -721,6 +721,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def closeEvent(self, event):
         self._visualize_tab.stop_if_running()
+        self._curve_fit_tab.shutdown()
         if self._bridge:
             self._bridge.shutdown()
         event.accept()
