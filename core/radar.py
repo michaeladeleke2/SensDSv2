@@ -17,19 +17,19 @@ def build_config():
     cfg = FmcwSimpleSequenceConfig()
     # ── Sequence (cfg_simo_seq.json) ─────────────────────────────────────────
     cfg.frame_repetition_time_s = 0.10       # 10 fps
-    cfg.chirp_repetition_time_s = 0.0002     # PRF = 5 000 Hz
+    cfg.chirp_repetition_time_s = 0.0003     # PRF = 3333 Hz
     cfg.num_chirps              = 128
     cfg.tdm_mimo                = False
     # ── Chirp (cfg_simo_chirp.json) ──────────────────────────────────────────
     cfg.chirp.start_frequency_Hz = 58.0e9
     cfg.chirp.end_frequency_Hz   = 63.5e9   # 5.5 GHz bandwidth
-    cfg.chirp.sample_rate_Hz     = 2e6
+    cfg.chirp.sample_rate_Hz     = 1e6
     cfg.chirp.num_samples        = 256
     cfg.chirp.rx_mask            = 7        # 3 receive antennas
     cfg.chirp.tx_mask            = 1
     cfg.chirp.tx_power_level     = 31
     cfg.chirp.lp_cutoff_Hz       = 500000
-    cfg.chirp.hp_cutoff_Hz       = 80000
+    cfg.chirp.hp_cutoff_Hz       = 20000
     cfg.chirp.if_gain_dB         = 33
     return cfg
 

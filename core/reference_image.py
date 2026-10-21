@@ -31,9 +31,9 @@ returns because their color window widens.
 import numpy as np
 
 # The reference script's own defaults, passed to it unchanged.
-REF_MAX_SPEED_M_S = 6.19405905
+REF_MAX_SPEED_M_S = 4.112380411522634
 REF_ANTENNA = 0
-REF_JET_VMIN = -20.0
+REF_JET_VMIN = -50.0
 
 # The Reduce noise floor. See the module docstring for where it comes from.
 REDUCED_NOISE_JET_VMIN = -50.0

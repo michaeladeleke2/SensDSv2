@@ -117,9 +117,12 @@ def compute_rdm_db(
     return rdm_db
 
 
-def select_range_bin_raw(rdm_db: np.ndarray) -> int:
-    """Energy-max range bin for one frame (before temporal median smooth)."""
-    return int(np.argmax(rdm_db.sum(axis=1)))
+MIN_RANGE_BIN = 15
+
+def select_range_bin_raw(rdm_db: np.ndarray, min_bin: int = MIN_RANGE_BIN) -> int:
+    start = int(np.clip(min_bin, 0, rdm_db.shape[0] - 1))
+    scores = rdm_db[start:].max(axis=1)
+    return start + int(np.argmax(scores))
 
 
 def smooth_range_bins(
@@ -213,8 +216,8 @@ def compute_recorded(
             doppler_fft_size=doppler_fft_size,
         )
 
-    per_frame_energy = np.argmax(rdm_cube.sum(axis=2), axis=1).astype(np.int32)
-    range_bin = smooth_range_bins(per_frame_energy, n_range_bins, SMOOTH_WINDOW)
+    raw_bins = np.array([select_range_bin_raw(rdm_cube[i]) for i in range(n_frame)], dtype=np.int32,)
+    range_bin = smooth_range_bins(raw_bins, n_range_bins, SMOOTH_WINDOW)
 
     spectrogram = np.zeros((n_frame, doppler_fft_size), dtype=np.float64)
     for i in range(n_frame):
@@ -234,8 +237,9 @@ ORIENT_VELOCITY_X = "velocity_x"
 
 def _jet_clim(plot_data: np.ndarray, jet_vmin: float) -> Tuple[float, float]:
     vmax = float(np.nanmax(plot_data))
-    vmin = jet_vmin if jet_vmin < vmax else vmax - 40.0
-    return vmin, vmax
+    if not np.isfinite(vmax) or vmax <= jet_vmin:
+        vmax = -10.0
+    return jet_vmin, vmax
 
 
 def _add_velocity_grid(ax, orientation: str = ORIENT_FRAME_X) -> None:
