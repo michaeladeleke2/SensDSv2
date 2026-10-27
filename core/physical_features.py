@@ -13,10 +13,16 @@ Two shapes are produced from the same extraction:
 
 Everything here is derived from the radar configuration in core/radar.py, so
 the numbers carry real units rather than arbitrary feature indices.
+
+Doppler velocities depend on the chirp spacing the sample was recorded with.
+The radar now uses 0.3 ms (the visualization change note; it was 0.2 ms), so
+the Collect tab records it in capture_info.json and samples are read with the
+spacing their folder says, or the current one when the folder does not say.
 """
 
 import csv
 import glob
+import json
 import os
 
 import numpy as np
@@ -32,10 +38,15 @@ F_END = 63.5e9
 BANDWIDTH = F_END - F_START                 # 5.5 GHz
 F_CENTER = (F_START + F_END) / 2
 WAVELENGTH = C / F_CENTER
-CHIRP_REP_S = 0.0002
-PRF = 1.0 / CHIRP_REP_S                     # 5 kHz
+CHIRP_REP_S = 0.0003                        # the radar's chirp spacing now (was 0.0002)
+PRF = 1.0 / CHIRP_REP_S                     # 3.33 kHz
 FRAME_S = 0.10                              # 10 fps
-MAX_VELOCITY = PRF * WAVELENGTH / 4         # ±6.17 m/s
+MAX_VELOCITY = PRF * WAVELENGTH / 4         # ±4.11 m/s
+
+
+def max_velocity(chirp_rep_s: float = CHIRP_REP_S) -> float:
+    """The Doppler axis edge, m/s, for a chirp spacing in seconds."""
+    return WAVELENGTH / (4.0 * chirp_rep_s)
 RANGE_RES_M = C / (2 * BANDWIDTH)           # 2.73 cm
 N_SAMPLES_CFG = 256
 MAX_RANGE_M = N_SAMPLES_CFG * C / (4 * BANDWIDTH)   # 3.49 m
@@ -47,6 +58,14 @@ CLIP_VALUE = 1e-6
 # A frame counts as "moving" when the tracked speed exceeds this. Tuned so an
 # idle capture reports near-zero motion rather than counting noise crossings.
 MOTION_SPEED_MS = 0.25
+
+# The micro-Doppler signature of a frame: the Doppler bins at least
+# SIGNATURE_DB above the frame's own noise floor (its median), so receiver
+# noise never counts and a frame with nothing moving has no signature, and
+# within SIGNATURE_PEAK_DB of the frame's strongest bin, so the faint skirts of
+# a strong return do not stretch it.
+SIGNATURE_DB = 15.0
+SIGNATURE_PEAK_DB = 10.0
 
 _RANGE_WIN: dict = {}
 _DOPPLER_WIN: dict = {}
@@ -85,6 +104,7 @@ ALL_SUMMARY_FEATURES = [
     ("vel_peak_ms",         "Peak Doppler velocity",  "m/s"),
     ("vel_mean_ms",         "Mean Doppler velocity",  "m/s"),
     ("vel_std_ms",          "Velocity variability",   "m/s"),
+    ("vel_span_ms",         "Velocity span",          "m/s"),
     ("accel_peak_ms2",      "Peak acceleration",      "m/s²"),
     ("accel_mean_ms2",      "Mean |acceleration|",    "m/s²"),
     ("doppler_spread_ms",   "Doppler spread",         "m/s"),
@@ -105,6 +125,8 @@ ALL_FRAME_FEATURES = [
     ("accel_ms2",         "Acceleration",     "m/s²"),
     ("doppler_spread_ms", "Doppler spread",   "m/s"),
     ("energy",            "Return energy",    "a.u."),
+    ("vel_upper_ms",      "Highest velocity in the signature", "m/s"),
+    ("vel_lower_ms",      "Lowest velocity in the signature",  "m/s"),
 ]
 
 # ── Exposed set ──────────────────────────────────────────────────────────────
@@ -112,17 +134,30 @@ ALL_FRAME_FEATURES = [
 # (from how the tracked range changes between frames), so the whole tab can be
 # explained in one sentence. "toward/away" is literal — the radar measures
 # radial motion, so a purely sideways swipe registers very little speed.
+#
+# Velocity span (requested by Dr. Hazel) is the one Doppler feature: the
+# highest velocity in the gesture's micro-Doppler signature minus the lowest,
+# over the whole sample. In each frame the signature is the Doppler bins well
+# above that frame's noise and near its strongest return (SIGNATURE_DB,
+# SIGNATURE_PEAK_DB); its top and bottom are the frame's highest and lowest
+# velocities. It is not mean speed: mean speed averages
+# how fast the tracked distance changes, while the span is how wide a range
+# of velocities the gesture covers. A push and pull swings from toward to
+# away and has a wide span; a hand held still has none.
 SUMMARY_FEATURES = [
     ("range_mean_m",         "Distance from radar",       "m"),
     ("range_travel_m",       "Distance traveled",         "m"),
     ("radial_speed_max_ms",  "Peak speed (toward/away)",  "m/s"),
     ("radial_speed_mean_ms", "Mean speed (toward/away)",  "m/s"),
+    ("vel_span_ms",          "Velocity span",             "m/s"),
 ]
 
 FRAME_FEATURES = [
     ("time_s",          "Time",                 "s"),
     ("range_m",         "Distance",             "m"),
     ("radial_speed_ms", "Speed (toward/away)",  "m/s"),
+    ("vel_upper_ms",    "Highest velocity in the signature", "m/s"),
+    ("vel_lower_ms",    "Lowest velocity in the signature",  "m/s"),
 ]
 
 SUMMARY_KEYS = [k for k, _, _ in SUMMARY_FEATURES]
@@ -160,7 +195,8 @@ def _range_profile(cube: np.ndarray) -> np.ndarray:
     return np.swapaxes(prof, 0, 1)                             # (ant, fr, bin)
 
 
-def _doppler_at_bins(cube: np.ndarray, bins: np.ndarray, antenna: int = 0):
+def _doppler_at_bins(cube: np.ndarray, bins: np.ndarray, antenna: int = 0,
+                     chirp_rep_s: float = CHIRP_REP_S):
     """
     Doppler spectrum for one range bin per frame.
 
@@ -192,10 +228,11 @@ def _doppler_at_bins(cube: np.ndarray, bins: np.ndarray, antenna: int = 0):
     db = np.full(power.shape, floor, dtype=np.float64)
     above = power >= CLIP_VALUE ** 2
     db[above] = 10.0 * np.log10(power[above])
-    return db, np.linspace(-MAX_VELOCITY, MAX_VELOCITY, dfft)
+    vmax = max_velocity(chirp_rep_s)
+    return db, np.linspace(-vmax, vmax, dfft)
 
 
-def frame_series(cube: np.ndarray) -> dict:
+def frame_series(cube: np.ndarray, chirp_rep_s: float = CHIRP_REP_S) -> dict:
     """Per-frame physical quantities. Returns a dict of equal-length arrays."""
     cube = np.asarray(cube)
     if cube.ndim != 4:
@@ -212,7 +249,7 @@ def frame_series(cube: np.ndarray) -> dict:
     rng_m = peak_bin * (MAX_RANGE_M / n_bins)
     energy = mag.max(axis=1)
 
-    db, vel_axis = _doppler_at_bins(cube, peak_bin)
+    db, vel_axis = _doppler_at_bins(cube, peak_bin, chirp_rep_s=chirp_rep_s)
     # Energy-weighted Doppler centroid and spread, per frame.
     w = 10.0 ** (db / 10.0)
     w = w - w.min(axis=1, keepdims=True)
@@ -221,6 +258,15 @@ def frame_series(cube: np.ndarray) -> dict:
     w = w / total
     velocity = (vel_axis[None, :] * w).sum(axis=1)
     spread = np.sqrt((((vel_axis[None, :] - velocity[:, None]) ** 2) * w).sum(axis=1))
+
+    # The signature's top and bottom, NaN in a frame with no signature
+    strong = db >= np.maximum(np.median(db, axis=1, keepdims=True) + SIGNATURE_DB,
+                              db.max(axis=1, keepdims=True) - SIGNATURE_PEAK_DB)
+    has = strong.any(axis=1)
+    upper = np.full(n_frame, np.nan)
+    lower = np.full(n_frame, np.nan)
+    upper[has] = np.max(np.where(strong, vel_axis[None, :], -np.inf), axis=1)[has]
+    lower[has] = np.min(np.where(strong, vel_axis[None, :], np.inf), axis=1)[has]
 
     dt = FRAME_S
     radial = np.zeros(n_frame)
@@ -239,6 +285,8 @@ def frame_series(cube: np.ndarray) -> dict:
         "accel_ms2": accel,
         "doppler_spread_ms": spread,
         "energy": energy,
+        "vel_upper_ms": upper,
+        "vel_lower_ms": lower,
     }
 
 
@@ -273,6 +321,7 @@ def summarize(series: dict) -> dict:
         "vel_peak_ms": float(np.abs(vel).max()),
         "vel_mean_ms": float(vel.mean()),
         "vel_std_ms": float(vel.std()),
+        "vel_span_ms": _span(series),
         "accel_peak_ms2": float(np.abs(accel).max()),
         "accel_mean_ms2": float(np.abs(accel).mean()),
         "doppler_spread_ms": float(spread.mean()),
@@ -285,10 +334,37 @@ def summarize(series: dict) -> dict:
     }
 
 
-def extract(cube: np.ndarray):
+def _span(series: dict) -> float:
+    """Highest minus lowest signature velocity over the sample; 0 with no signature."""
+    upper = series.get("vel_upper_ms")
+    lower = series.get("vel_lower_ms")
+    if upper is None or not np.any(np.isfinite(upper)):
+        return 0.0
+    return float(np.nanmax(upper) - np.nanmin(lower))
+
+
+def _csv_value(x) -> str:
+    """.6g, with a frame that has no value left blank (CODAP reads it as missing)."""
+    return f"{x:.6g}" if np.isfinite(x) else ""
+
+
+def extract(cube: np.ndarray, chirp_rep_s: float | None = None):
     """Returns (summary_dict, frame_series_dict)."""
-    series = frame_series(cube)
+    series = frame_series(cube, CHIRP_REP_S if chirp_rep_s is None else chirp_rep_s)
     return summarize(series), series
+
+
+def chirp_for_folder(folder: str) -> float:
+    """
+    The chirp spacing a gesture folder's samples were recorded with, from its
+    capture_info.json, or the radar's current spacing when it does not say.
+    """
+    try:
+        with open(os.path.join(folder, "capture_info.json")) as f:
+            value = float(json.load(f).get("chirp_repetition_time_s", CHIRP_REP_S))
+        return value if value > 0 else CHIRP_REP_S
+    except Exception:
+        return CHIRP_REP_S
 
 
 # ── Dataset scanning ─────────────────────────────────────────────────────────
@@ -331,6 +407,7 @@ def scan_samples(data_root: str | None = None) -> list:
                     "student": student,
                     "gesture": gesture,
                     "name": os.path.basename(p),
+                    "chirp_rep_s": chirp_for_folder(gdir),
                 })
     return out
 
@@ -353,7 +430,7 @@ def write_summary_csv(records: list, path: str) -> int:
         for i, r in enumerate(records, 1):
             w.writerow(
                 [i, r["student"], r["gesture"], r["name"]]
-                + [f"{r['summary'][k]:.6g}" for k in SUMMARY_KEYS]
+                + [_csv_value(r['summary'][k]) for k in SUMMARY_KEYS]
             )
     return len(records)
 
@@ -373,7 +450,7 @@ def write_frames_csv(records: list, path: str) -> int:
             for j in range(len(s["time_s"])):
                 w.writerow(
                     [i, r["student"], r["gesture"], j]
-                    + [f"{s[k][j]:.6g}" for k in FRAME_KEYS]
+                    + [_csv_value(s[k][j]) for k in FRAME_KEYS]
                 )
                 rows += 1
     return rows

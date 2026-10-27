@@ -2,6 +2,8 @@ import json
 import os
 import time
 import numpy as np
+
+from core.physical_features import CHIRP_REP_S
 from PyQt6 import QtWidgets, QtCore, QtGui
 from scipy.ndimage import gaussian_filter
 from core.processing import (
@@ -58,6 +60,9 @@ def write_capture_info(folder: str, method: str, flipped: bool):
         # velocity on top, which is what "flipped" means for the app's own.
         "velocity_flipped": True if renderer == "reference" else bool(flipped),
         "updated": time.strftime("%Y-%m-%d %H:%M:%S"),
+        # The chirp spacing the radar ran with, so the Analysis tab reads the
+        # raw samples' Doppler velocities on the right scale.
+        "chirp_repetition_time_s": CHIRP_REP_S,
     }
     if renderer == "reference":
         info["jet_vmin"] = current_jet_vmin()

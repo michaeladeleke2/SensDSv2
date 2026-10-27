@@ -8,6 +8,11 @@ Pick any feature for X and any for Y and the plot redraws from cached values,
 so students can hunt for the pair that separates their gestures. Export writes
 the same numbers shown on screen, in two shapes: one row per gesture sample,
 and one row per radar frame.
+
+Clicking a point shows the sample the way the Visualize tab draws the radar:
+its micro-Doppler spectrogram and its range map, made from the raw recording
+by the same scripts and settings (core/sample_preview.py), rather than the
+training PNG saved at capture time. Click a picture to see it large.
 """
 
 import os
@@ -17,6 +22,8 @@ import pyqtgraph as pg
 from PyQt6 import QtCore, QtGui, QtWidgets
 
 from core import physical_features as PF
+from core import range_map as RM
+from core import sample_preview as SP
 from ui import (HintCard, _scrollable_left, app_colors, is_dark_mode,
                 zoom_button_row)
 
@@ -131,7 +138,7 @@ class FeatureWorker(QtCore.QObject):
                     return
                 if cube.ndim != 4:
                     continue
-                summary, series = PF.extract(cube)
+                summary, series = PF.extract(cube, s.get("chirp_rep_s"))
                 out.append({
                     "student": s["student"],
                     "gesture": s["gesture"],
@@ -152,12 +159,45 @@ class FeatureWorker(QtCore.QObject):
             self.error.emit(f"{e}\n{traceback.format_exc()}")
 
 
+class _PreviewSignals(QtCore.QObject):
+    ready = QtCore.pyqtSignal(object, int)
+    failed = QtCore.pyqtSignal(str, int)
+
+
+class _PreviewJob(QtCore.QRunnable):
+    """Load one sample and run the Visualize processing over it, off the GUI thread."""
+
+    def __init__(self, path, mode, token, signals):
+        super().__init__()
+        self._path, self._mode, self._token, self._signals = path, mode, token, signals
+
+    def run(self):
+        try:
+            outcome = ("ready", SP.compute(np.load(self._path), mode=self._mode))
+        except Exception as e:
+            outcome = ("failed", str(e))
+        try:
+            if outcome[0] == "ready":
+                self._signals.ready.emit(outcome[1], self._token)
+            else:
+                self._signals.failed.emit(outcome[1], self._token)
+        except RuntimeError:
+            pass      # the tab was closed while this ran
+
+
+class _ClickLabel(QtWidgets.QLabel):
+    clicked = QtCore.pyqtSignal()
+
+    def mousePressEvent(self, event):
+        if event.button() == QtCore.Qt.MouseButton.LeftButton:
+            self.clicked.emit()
+        super().mousePressEvent(event)
+
+
 class FeaturesTab(QtWidgets.QWidget):
-    # Detail column width, and the box the sample's PNG is drawn into. The
-    # PNG is saved 400x300, so 264x198 shows it at native aspect with no crop.
-    DETAIL_W = 300
-    IMG_W = 264
-    IMG_H = 198
+    # Detail column width, and the width the two previews are shown at.
+    DETAIL_W = 380
+    IMG_W = 344
 
     def __init__(self):
         super().__init__()
@@ -180,9 +220,16 @@ class FeaturesTab(QtWidgets.QWidget):
         self._records = []
         self._selected = None
         self._highlight = None
+        self._preview = None          # SP.compute() result for the selected sample
+        self._preview_png = {}        # kind -> PNG bytes at 2x
+        self._preview_token = 0
+        self._preview_signals = _PreviewSignals(self)
+        self._preview_signals.ready.connect(self._on_preview_ready)
+        self._preview_signals.failed.connect(self._on_preview_failed)
 
         self._setup_ui()
         self.refresh()
+        RM.on_settings_changed(self._on_range_settings)
 
     # ── layout ───────────────────────────────────────────────────────────────
 
@@ -258,10 +305,11 @@ class FeaturesTab(QtWidgets.QWidget):
         layout.addWidget(self._lbl("Export for CODAP"))
         note = QtWidgets.QLabel(
             "Summary: one line for each gesture you recorded, holding its "
-            "four measurements. Use this to compare gestures.\n\n"
+            "five measurements. Use this to compare gestures.\n\n"
             "Frames: one line for every picture the radar took, ten per "
-            "second. Use this to see how distance and speed changed while "
-            "a single gesture was happening."
+            "second. Use this to see how distance, speed and the highest and "
+            "lowest velocities in the micro-Doppler changed while a single "
+            "gesture was happening."
         )
         note.setObjectName("note")
         note.setWordWrap(True)
@@ -293,6 +341,13 @@ class FeaturesTab(QtWidgets.QWidget):
             "Click a point to see the spectrogram it came from. A point sitting "
             "far from the rest of its group is usually a recording that went "
             "wrong, and the picture will show you how.",
+            "Velocity span is how wide a range of velocities the gesture's "
+            "micro-Doppler covers: its highest velocity minus its lowest. A "
+            "push-and-pull swings from toward to away, so its span is wide; a "
+            "hand held still has none.",
+            "Mean speed and velocity span are different: mean speed averages "
+            "how fast your distance from the radar changed, velocity span "
+            "measures how spread out the micro-Doppler is.",
         ], c=self._c))
 
         self._msg = QtWidgets.QLabel("")
@@ -369,12 +424,27 @@ class FeaturesTab(QtWidgets.QWidget):
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(8)
 
-        self._img_label = QtWidgets.QLabel()
-        self._img_label.setObjectName("img_frame")
-        self._img_label.setFixedSize(self.IMG_W, self.IMG_H)
-        self._img_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-        self._img_label.setWordWrap(True)
-        body.addWidget(self._img_label)
+        self._preview_labels = {}
+        for kind, title in (("doppler", "Micro-Doppler (as on Visualize)"),
+                            ("range", "Range map (as on Visualize)")):
+            body.addWidget(self._lbl(title))
+            label = _ClickLabel()
+            label.setObjectName("img_frame")
+            label.setFixedWidth(self.IMG_W)
+            label.setMinimumHeight(120)
+            label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+            label.setWordWrap(True)
+            label.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+            label.setToolTip("Click to see it large")
+            label.clicked.connect(lambda k=kind: self._open_preview(k))
+            body.addWidget(label)
+            self._preview_labels[kind] = label
+        self._preview_note = QtWidgets.QLabel(
+            "Drawn from the raw recording by the Visualize tab's own plots. "
+            "The range map follows the MTI and distance settings there.")
+        self._preview_note.setObjectName("hintmsg")
+        self._preview_note.setWordWrap(True)
+        body.addWidget(self._preview_note)
 
         self._detail_meta = QtWidgets.QLabel("")
         self._detail_meta.setObjectName("detail_meta")
@@ -608,6 +678,8 @@ class FeaturesTab(QtWidgets.QWidget):
     def _clear_selection(self):
         self._selected = None
         self._highlight = None
+        self._preview = None
+        self._preview_token += 1
         self._detail_body.setVisible(False)
         self._detail_hint.setVisible(True)
 
@@ -616,20 +688,8 @@ class FeaturesTab(QtWidgets.QWidget):
         self._detail_hint.setVisible(False)
         self._detail_body.setVisible(True)
 
-        png = record.get("png")
-        pixmap = QtGui.QPixmap(png) if png else QtGui.QPixmap()
-        if pixmap.isNull():
-            self._img_label.setPixmap(QtGui.QPixmap())
-            self._img_label.setText(
-                "No spectrogram image was saved next to this recording."
-            )
-        else:
-            self._img_label.setText("")
-            self._img_label.setPixmap(pixmap.scaled(
-                self.IMG_W, self.IMG_H,
-                QtCore.Qt.AspectRatioMode.KeepAspectRatio,
-                QtCore.Qt.TransformationMode.SmoothTransformation,
-            ))
+        if self._preview is None or self._preview.get("path") != record["path"]:
+            self._start_preview(record)
 
         n_frames = len(record["series"]["time_s"])
         self._detail_meta.setText(
@@ -659,6 +719,86 @@ class FeaturesTab(QtWidgets.QWidget):
         )
 
         self._mark_selected()
+
+    # ── previews: the sample as the Visualize tab draws it ──────────────────
+
+    def _start_preview(self, record):
+        self._preview_token += 1
+        self._preview = None
+        self._preview_png = {}
+        for label in self._preview_labels.values():
+            label.setPixmap(QtGui.QPixmap())
+            label.setText("Drawing…")
+            label.setFixedHeight(120)
+        job = _PreviewJob(record["path"], RM.mode(), self._preview_token, self._preview_signals)
+        QtCore.QThreadPool.globalInstance().start(job)
+
+    def _on_preview_ready(self, pre, token):
+        if token != self._preview_token or self._selected is None:
+            return
+        pre["path"] = self._selected["path"]
+        self._preview = pre
+        self._draw_previews()
+
+    def _on_preview_failed(self, msg, token):
+        if token != self._preview_token:
+            return
+        for label in self._preview_labels.values():
+            label.setPixmap(QtGui.QPixmap())
+            label.setText(f"Could not draw this recording: {msg.splitlines()[0]}")
+
+    def _draw_previews(self, kinds=("doppler", "range")):
+        if self._preview is None:
+            return
+        for kind in kinds:
+            render = SP.render_doppler if kind == "doppler" else SP.render_range
+            try:
+                png = render(self._preview, scale=2.0)
+            except Exception as e:
+                self._preview_labels[kind].setText(f"Could not draw: {e}")
+                continue
+            self._preview_png[kind] = png
+            pix = QtGui.QPixmap()
+            pix.loadFromData(png, "PNG")
+            dpr = self.devicePixelRatioF() or 1.0
+            scaled = pix.scaledToWidth(int(self.IMG_W * dpr),
+                                       QtCore.Qt.TransformationMode.SmoothTransformation)
+            scaled.setDevicePixelRatio(dpr)
+            label = self._preview_labels[kind]
+            label.setText("")
+            label.setPixmap(scaled)
+            label.setFixedHeight(int(round(scaled.height() / dpr)) + 2)
+
+    def _on_range_settings(self, settings, changed):
+        try:
+            if self._selected is None or self._preview is None:
+                return
+            if changed["mti"]:
+                self._start_preview(self._selected)        # a new mode means new numbers
+            elif changed["distance"]:
+                self._draw_previews(("range",))
+        except RuntimeError:
+            RM.remove_listener(self._on_range_settings)
+
+    def _open_preview(self, kind):
+        png = self._preview_png.get(kind)
+        if not png:
+            return
+        pix = QtGui.QPixmap()
+        pix.loadFromData(png, "PNG")
+        dlg = QtWidgets.QDialog(self)
+        dlg.setWindowTitle(("Micro-Doppler" if kind == "doppler" else "Range map")
+                           + (f"  ·  {self._selected['name']}" if self._selected else ""))
+        lay = QtWidgets.QVBoxLayout(dlg)
+        screen = self.screen().availableGeometry() if self.screen() else QtCore.QRect(0, 0, 1400, 900)
+        width = min(int(screen.width() * 0.8), 1100)
+        view = QtWidgets.QLabel()
+        dpr = self.devicePixelRatioF() or 1.0
+        big = pix.scaledToWidth(int(width * dpr), QtCore.Qt.TransformationMode.SmoothTransformation)
+        big.setDevicePixelRatio(dpr)
+        view.setPixmap(big)
+        lay.addWidget(view)
+        dlg.exec()
 
     def _mark_selected(self):
         """Ring the selected point so it is findable among its neighbors."""

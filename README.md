@@ -131,6 +131,11 @@ SensDSv2/
 - **Distance shown (Y)**: From / To in metres. Only the bins inside are drawn and the colours are scaled to them
 - MTI and the distance are shared with the Curve Fit tab
 
+### Analysis: Physical Features
+- Five measurements per sample: distance from radar, distance traveled, peak and mean speed (toward/away), and **velocity span** — the highest velocity in the gesture's micro-Doppler signature minus the lowest (bins 15 dB above the frame's noise and within 10 dB of its peak). It is not mean speed, and a still hand gives 0
+- Clicking a point draws the sample from its raw recording with the Visualize tab's own plots: the micro-Doppler (`LiveSpectrogramPlot`) and the range map (`range_map_v1.py`, with the shared MTI and distance settings); click a picture to see it large (`core/sample_preview.py`)
+- Doppler velocities use the chirp spacing recorded in each folder's `capture_info.json` (`chirp_repetition_time_s`, written by the Collect tab), or 0.3 ms when a folder does not say
+
 ### Curve Fit
 - **Picture**: the Doppler spectrogram (speed) or the range map (distance, with the same MTI and distance controls)
 - **Auto Fit** freezes, finds the strongest signal in each moment (on the spectrogram the louder of toward and away, ignoring the still band within 0.1 m/s), marks the high ▲ and low ▼ peaks and fits the chosen model starting from them
