@@ -1,4 +1,5 @@
 import os
+import json
 import math
 import random
 import time
@@ -10,6 +11,7 @@ from core.processing import SpectrogramProcessor
 from core.platform_utils import min_infer_gap_s
 from ui import HintCard, _scrollable_left, GestureWindowBar
 from ui.spectrogram_widget import DB_MIN, DB_MAX, FREQ_BINS, MAX_VELOCITY, FRAME_TIME_S
+from core import starter_model as SM
 
 
 MODELS_ROOT = os.path.join(os.path.expanduser("~"), "SensDSv2_data", "models")
@@ -224,6 +226,64 @@ def _frames_to_pil(frames):
         return None
 
 
+# ─── maze moves ─────────────────────────────────────────────────────────────
+# Team feedback: each class of the loaded model can be given any move, so a
+# model with other classes, such as the starter model's swipe_up and
+# swipe_down, can drive the maze too. Remembered per set of classes in
+# ~/SensDSv2_data/maze_moves.json.
+
+MAZE_ACTIONS = [
+    ("forward", "Move forward"),
+    ("left", "Turn left"),
+    ("right", "Turn right"),
+    ("around", "Turn around"),
+    ("none", "Do nothing"),
+]
+_MOVES_FILE = os.path.join(os.path.expanduser("~"), "SensDSv2_data", "maze_moves.json")
+_MOVE_ICONS = {"idle": "🤚", "push": "👋", "swipe_left": "👈", "swipe_right": "👉",
+               "swipe_up": "👆", "swipe_down": "👇"}
+
+
+def default_maze_action(label: str) -> str:
+    """The move a class starts with: swipes turn, a push (or swipe up) moves
+    forward, swipe down turns around, anything else does nothing."""
+    label = str(label).lower()
+    if label == "swipe_left":
+        return "left"
+    if label == "swipe_right":
+        return "right"
+    if label in ("push", "swipe_up"):
+        return "forward"
+    if label == "swipe_down":
+        return "around"
+    return "none"
+
+
+def load_maze_moves(classes) -> dict:
+    valid = {k for k, _ in MAZE_ACTIONS}
+    try:
+        with open(_MOVES_FILE) as f:
+            saved = json.load(f).get(",".join(classes), {})
+    except Exception:
+        saved = {}
+    return {c: saved.get(c) if saved.get(c) in valid else default_maze_action(c) for c in classes}
+
+
+def save_maze_moves(classes, moves: dict):
+    try:
+        with open(_MOVES_FILE) as f:
+            data = json.load(f)
+    except Exception:
+        data = {}
+    data[",".join(classes)] = {c: moves[c] for c in classes}
+    try:
+        os.makedirs(os.path.dirname(_MOVES_FILE), exist_ok=True)
+        with open(_MOVES_FILE, "w") as f:
+            json.dump(data, f, indent=2)
+    except Exception:
+        pass        # a setting, never worth an error
+
+
 def _generate_maze(rows, cols, seed=42):
     """Recursive-backtracker DFS maze generation."""
     walls = [[_N | _E | _S | _W for _ in range(cols)] for _ in range(rows)]
@@ -247,14 +307,38 @@ def _generate_maze(rows, cols, seed=42):
 
 # ─── model-load worker ───────────────────────────────────────────────────────
 
+class StarterWorker(QtCore.QObject):
+    """Finds the starter model, downloading it the first time."""
+    progress = QtCore.pyqtSignal(str)
+    ready    = QtCore.pyqtSignal(str)
+    error    = QtCore.pyqtSignal(str)
+    done     = QtCore.pyqtSignal()
+
+    @QtCore.pyqtSlot()
+    def run(self):
+        try:
+            folder = SM.find_starter()
+            if folder is None:
+                mb = lambda n: n / 1048576
+                self.progress.emit("Starter model: downloading (once)…")
+                folder = SM.download_starter(lambda d, t: self.progress.emit(
+                    f"Starter model: {mb(d):.0f} of {mb(t):.0f} MB…"))
+            self.ready.emit(folder)
+        except Exception as e:
+            self.error.emit(f"Could not get the starter model: {e}. It needs internet the first time.")
+        finally:
+            self.done.emit()
+
+
 class ModelLoadWorker(QtCore.QObject):
     success = QtCore.pyqtSignal(object, object, dict, str, list)
     error   = QtCore.pyqtSignal(str)
     done    = QtCore.pyqtSignal()
 
-    def __init__(self, path: str):
+    def __init__(self, path: str, name: str | None = None):
         super().__init__()
         self._path = path
+        self._name = name
 
     @QtCore.pyqtSlot()
     def run(self):
@@ -271,7 +355,7 @@ class ModelLoadWorker(QtCore.QObject):
                 model.to(device)
             raw      = model.config.id2label
             id2label = {int(k): v for k, v in raw.items()}
-            name     = os.path.basename(self._path.rstrip("/\\"))
+            name     = self._name or os.path.basename(self._path.rstrip("/\\"))
             classes  = [id2label[i] for i in sorted(id2label)]
             self.success.emit(model, processor, id2label, name, classes)
         except Exception as e:
@@ -713,23 +797,35 @@ class MazeWidget(QtWidgets.QWidget):
         return _ARROW.get(self._facing, "→")
 
     def apply_gesture(self, gesture: str) -> str:
-        """Apply a gesture to the maze player. Returns a feedback string."""
+        """Apply a gesture with its default move. Returns a feedback string."""
+        if gesture == "idle" and not self._won:
+            return "Idle. No move made. Do a swipe or push!"
+        return self.apply_action(default_maze_action(gesture), gesture)
+
+    def apply_action(self, action: str, gesture: str = "") -> str:
+        """One move: forward, left, right, around or none. Returns feedback."""
         if self._won:
             return "You already won! Press Reset to play again. 🎉"
 
-        if gesture == "swipe_left":
+        if action == "left":
             self._facing = _TURN_L[self._facing]
             self._moves += 1
             self.update()
             return f"Turned left! Now facing {_LABEL[self._facing]}"
 
-        elif gesture == "swipe_right":
+        elif action == "around":
+            self._facing = _OPP[self._facing]
+            self._moves += 1
+            self.update()
+            return f"Turned around! Now facing {_LABEL[self._facing]}"
+
+        elif action == "right":
             self._facing = _TURN_R[self._facing]
             self._moves += 1
             self.update()
             return f"Turned right! Now facing {_LABEL[self._facing]}"
 
-        elif gesture == "push":
+        elif action == "forward":
             # Check if there's a wall in the facing direction
             if self._walls[self._pr][self._pc] & self._facing:
                 # Wall in the way — flash bump
@@ -753,11 +849,9 @@ class MazeWidget(QtWidgets.QWidget):
                     return f"🎉 You reached the goal in {self._moves} moves!"
                 return f"Moved {_LABEL[self._facing].split()[0]}! Keep going!"
 
-        elif gesture == "idle":
-            return "Idle. No move made. Do a swipe or push!"
-
-        else:
-            return f"Unknown gesture: {gesture}"
+        name = str(gesture).replace("_", " ")
+        name = name[:1].upper() + name[1:] if name else "That gesture"
+        return f"{name} does nothing in the maze. Pick a move for it under Gesture Controls."
 
     def paintEvent(self, event):
         try:
@@ -1040,6 +1134,17 @@ class TestTab(QtWidgets.QWidget):
 
         self._mode = self._MODE_SINGLE
 
+        # The starter model is the default: the first time the tab is shown
+        # with no model loaded, it is loaded (and downloaded, once)
+        self._starter_tried = False
+        self._loading = False
+        self._load_token = 0
+        self._starter_thread = None
+        self._starter_worker = None
+        self._starter_token = -1
+        self._maze_moves: dict = {}
+        self._maze_classes: list = []
+
         self._setup_ui()
 
     # ── public interface ──────────────────────────────────────────────────────
@@ -1086,7 +1191,9 @@ class TestTab(QtWidgets.QWidget):
         heading.setObjectName("test_heading")
         layout.addWidget(heading)
 
-        subtitle = QtWidgets.QLabel("Load your model, then pick a game mode!")
+        subtitle = QtWidgets.QLabel(
+            "Start with the six-gesture starter model, or load your own, then pick a game mode!")
+        subtitle.setWordWrap(True)
         subtitle.setObjectName("test_subtitle")
         layout.addWidget(subtitle)
 
@@ -1104,6 +1211,22 @@ class TestTab(QtWidgets.QWidget):
         """)
         load_btn.clicked.connect(self._load_model)
         layout.addWidget(load_btn)
+
+        self._starter_btn = QtWidgets.QPushButton("⭐  Use Starter Model (6 gestures)")
+        self._starter_btn.setToolTip(
+            "The six-gesture model that comes with SensDS: idle, push, swipe down,\n"
+            "swipe left, swipe right, swipe up. Downloaded once (about 170 MB),\n"
+            "then kept in SensDSv2_data/models/starter_six_class.")
+        self._starter_btn.setStyleSheet("""
+            QPushButton {
+                background: white; border: 1px solid #1a3a5c; border-radius: 6px;
+                padding: 5px 10px; font-size: 12px; color: #1a3a5c; font-weight: bold;
+            }
+            QPushButton:hover { background: #eaf2fb; }
+            QPushButton:disabled { color: #999; border-color: #ccc; }
+        """)
+        self._starter_btn.clicked.connect(self._use_starter)
+        layout.addWidget(self._starter_btn)
 
         self._model_lbl = QtWidgets.QLabel("No model loaded.")
         self._model_lbl.setObjectName("test_model_lbl")
@@ -1281,6 +1404,17 @@ class TestTab(QtWidgets.QWidget):
         title_lbl = QtWidgets.QLabel("Gesture Controls")
         title_lbl.setStyleSheet("font-weight:bold; font-size:12px; color:#5b2c6f; border:none;")
         gl.addWidget(title_lbl)
+        # Rebuilt with a move menu for each class when a model loads
+        self._maze_moves_box = QtWidgets.QWidget()
+        self._maze_moves_box.setStyleSheet("background:transparent;")
+        self._maze_moves_layout = QtWidgets.QVBoxLayout(self._maze_moves_box)
+        self._maze_moves_layout.setContentsMargins(0, 0, 0, 0)
+        self._maze_moves_layout.setSpacing(3)
+        gl.addWidget(self._maze_moves_box)
+        self._maze_moves_note = QtWidgets.QLabel("Load a model to choose what each of its gestures does.")
+        self._maze_moves_note.setWordWrap(True)
+        self._maze_moves_note.setStyleSheet("color:#8e44ad; border:none; font-size:11px;")
+        gl.addWidget(self._maze_moves_note)
         for gesture, action in [("👈 Swipe Left", "Turn left"),
                                  ("👉 Swipe Right", "Turn right"),
                                  ("👋 Push", "Move forward"),
@@ -1295,7 +1429,7 @@ class TestTab(QtWidgets.QWidget):
             arrow.setStyleSheet("color:#8e44ad; border:none; font-size:12px;")
             rl.addWidget(arrow)
             rl.addStretch()
-            gl.addWidget(row_w)
+            self._maze_moves_layout.addWidget(row_w)
         layout.addWidget(guide)
 
         # ── Difficulty picker ──────────────────────────────────────────────────
@@ -1613,6 +1747,54 @@ class TestTab(QtWidgets.QWidget):
 
     # ── model loading ─────────────────────────────────────────────────────────
 
+    def showEvent(self, event):
+        super().showEvent(event)
+        if self._model is None and not self._loading and not self._starter_tried:
+            # Deferred so the tab paints before the work starts
+            QtCore.QTimer.singleShot(0, self._use_starter)
+
+    def _use_starter(self):
+        """Load the six-gesture starter model (downloading it the first time)."""
+        if self._loading:
+            return
+        self._starter_tried = True
+        self._loading = True
+        self._load_token += 1
+        token = self._load_token
+        self._starter_btn.setEnabled(False)
+        self._set_status("Loading the starter model…", "#e67e22")
+        self._model_lbl.setText("Starter model: loading…")
+        for b in (self._capture_btn, self._rs_start_btn, self._maze_start_btn):
+            b.setEnabled(False)
+        worker = StarterWorker()
+        thread = QtCore.QThread(self)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        # Bound methods, so Qt runs them on this (the GUI) thread
+        self._starter_token = token
+        worker.progress.connect(self._on_starter_progress)
+        worker.ready.connect(self._on_starter_ready)
+        worker.error.connect(self._on_starter_error)
+        worker.done.connect(thread.quit)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(worker.deleteLater)
+        thread.start()
+        self._starter_thread = thread
+        self._starter_worker = worker
+
+    # A starter download the student overtook with Load Model is ignored
+    def _on_starter_progress(self, text):
+        if self._starter_token == self._load_token:
+            self._model_lbl.setText(text)
+
+    def _on_starter_ready(self, folder):
+        if self._starter_token == self._load_token:
+            self._start_model_load(folder, SM.STARTER_NAME)
+
+    def _on_starter_error(self, msg):
+        if self._starter_token == self._load_token:
+            self._on_model_load_error(msg)
+
     def _load_model(self):
         os.makedirs(MODELS_ROOT, exist_ok=True)
         path = QtWidgets.QFileDialog.getExistingDirectory(
@@ -1620,14 +1802,18 @@ class TestTab(QtWidgets.QWidget):
         )
         if not path:
             return
+        self._load_token += 1           # a starter download still running is dropped
+        self._start_model_load(path)
 
+    def _start_model_load(self, path, name=None):
+        self._loading = True
         self._set_status("Loading model…", "#e67e22")
         self._model_lbl.setText("Loading…")
         self._capture_btn.setEnabled(False)
         self._rs_start_btn.setEnabled(False)
         self._maze_start_btn.setEnabled(False)
 
-        worker = ModelLoadWorker(path)
+        worker = ModelLoadWorker(path, name)
         thread = QtCore.QThread(self)
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
@@ -1641,6 +1827,8 @@ class TestTab(QtWidgets.QWidget):
         self._model_load_worker = worker
 
     def _on_model_loaded(self, model, processor, id2label, name, classes):
+        self._loading      = False
+        self._starter_btn.setEnabled(True)
         self._model        = model
         self._hf_processor = processor
         self._id2label     = id2label
@@ -1657,10 +1845,52 @@ class TestTab(QtWidgets.QWidget):
         self._set_status(f"✅ Loaded: {len(id2label)} classes ready!", "#27ae60")
         self._field.reset()
         self._rebuild_confirm_buttons(classes)
+        self._rebuild_maze_moves(classes)
         self._confirm_widget.setVisible(False)
         self.model_loaded.emit(name, classes)
 
+    def _rebuild_maze_moves(self, classes):
+        """A move menu for each class of the loaded model."""
+        self._maze_classes = list(classes)
+        self._maze_moves = load_maze_moves(classes)
+        while self._maze_moves_layout.count():
+            w = self._maze_moves_layout.takeAt(0).widget()
+            if w is not None:
+                w.deleteLater()
+        for c in classes:
+            row = QtWidgets.QWidget()
+            row.setStyleSheet("background:transparent;")
+            rl = QtWidgets.QHBoxLayout(row)
+            rl.setContentsMargins(0, 0, 0, 0)
+            rl.setSpacing(6)
+            name = c.replace("_", " ").title()
+            rl.addWidget(QtWidgets.QLabel(f"{_MOVE_ICONS.get(c, '•')} {name}"), 1)
+            combo = QtWidgets.QComboBox()
+            combo.setStyleSheet("font-size:12px; color:#5b2c6f; background:white;")
+            combo.setMinimumHeight(26)
+            combo.setMinimumWidth(118)
+            combo.setAccessibleName(f"Maze move for {name}")
+            for key, label in MAZE_ACTIONS:
+                combo.addItem(label, key)
+            combo.setCurrentIndex(combo.findData(self._maze_moves[c]))
+            combo.currentIndexChanged.connect(
+                lambda _i, cls=c, cb=combo: self._on_maze_move_changed(cls, cb.currentData()))
+            rl.addWidget(combo)
+            self._maze_moves_layout.addWidget(row)
+        self._maze_moves_note.setText("Choose what each gesture does in the maze.")
+        # The maze controls page grew; let the stack and the panel make room
+        page = self._controls_stack.widget(self._MODE_MAZE)
+        page.adjustSize()
+        self._controls_stack.setMinimumHeight(max(self._controls_stack.minimumHeight(), page.sizeHint().height()))
+        self._controls_stack.updateGeometry()
+
+    def _on_maze_move_changed(self, cls, action):
+        self._maze_moves[cls] = action
+        save_maze_moves(self._maze_classes, self._maze_moves)
+
     def _on_model_load_error(self, msg):
+        self._loading      = False
+        self._starter_btn.setEnabled(True)
         self._model        = None
         self._hf_processor = None
         self._id2label     = {}
@@ -2027,7 +2257,8 @@ class TestTab(QtWidgets.QWidget):
 
         elif mode == "maze":
             maze_threshold = self._maze_conf_threshold.value()
-            if conf < maze_threshold or best == "idle":
+            move = self._maze_moves.get(best, default_maze_action(best))
+            if conf < maze_threshold or move == "none":
                 # idle or below threshold — record without actual so it appears
                 # in history but doesn't skew the confusion matrix
                 self.prediction_made.emit(best, conf, maze_threshold, None, "Maze")
@@ -2039,7 +2270,7 @@ class TestTab(QtWidgets.QWidget):
             else:
                 # Gesture fired — treat the acted-on prediction as confirmed ground truth
                 self.prediction_made.emit(best, conf, maze_threshold, best, "Maze")
-                feedback = self._maze_widget.apply_gesture(best)
+                feedback = self._maze_widget.apply_action(move, best)
                 self._update_facing_label()
                 color = "#27ae60" if "wall" not in feedback.lower() else "#e74c3c"
                 self._set_status(f"{nice} ({conf:.0%})  ·  {feedback}", color)

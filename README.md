@@ -131,6 +131,11 @@ SensDSv2/
 - **Distance shown (Y)**: From / To in metres. Only the bins inside are drawn and the colours are scaled to them
 - MTI and the distance are shared with the Curve Fit tab
 
+### Test tab: starter model and maze moves
+- The six-gesture **starter model** (idle, push, swipe down, swipe left, swipe right, swipe up) loads by itself the first time the Test tab opens with no model; **Use Starter Model** loads it again. It is too big for git (343 MB), so the first use downloads it from the web version (float16 parts, each checked), widens it back to float32 and saves it as `~/SensDSv2_data/models/starter_six_class`, which **Load Model** can also open. A packaged app can carry it as `models/starter_six_class` (main.spec bundles `models/`) and then nothing is downloaded (`core/starter_model.py`)
+- In the Maze, **Gesture Controls** has a menu for each class of the loaded model: Move forward, Turn left, Turn right, Turn around or Do nothing. Defaults: swipe left / right turn, push and swipe up move forward, swipe down turns around, idle does nothing. Changes are remembered per set of classes in `~/SensDSv2_data/maze_moves.json`
+- On 136 local samples (old 0.2 ms chirp) the starter model called most pushes and swipes "swipe up" (32% correct; 4% drawn the current way); see the web version's `docs/procedures/test_model.md`
+
 ### Analysis: Physical Features
 - Five measurements per sample: distance from radar, distance traveled, peak and mean speed (toward/away), and **velocity span** — the highest velocity in the gesture's micro-Doppler signature minus the lowest (bins 15 dB above the frame's noise and within 10 dB of its peak). It is not mean speed, and a still hand gives 0
 - Clicking a point draws the sample from its raw recording with the Visualize tab's own plots: the micro-Doppler (`LiveSpectrogramPlot`) and the range map (`range_map_v1.py`, with the shared MTI and distance settings); click a picture to see it large (`core/sample_preview.py`)
