@@ -39,6 +39,21 @@ class GestureWindowBar(QtWidgets.QFrame):
             "icon":   "🟠",
             "text":   "Wait. Next window opens in",
         },
+        # The Test tab's Maze: a countdown, then GO! while the gesture is captured
+        "countdown": {
+            "bg":     "#3d2000",
+            "border": "#e67e22",
+            "fg":     "#f39c12",
+            "icon":   "🟠",
+            "text":   "Get ready… do your gesture at GO!",
+        },
+        "capture": {
+            "bg":     "#1a4228",
+            "border": "#27ae60",
+            "fg":     "#2ecc71",
+            "icon":   "🟢",
+            "text":   "GO! Do your gesture now!",
+        },
     }
 
     def __init__(self, parent=None):
@@ -71,7 +86,7 @@ class GestureWindowBar(QtWidgets.QFrame):
         self._state = ""
 
     def _apply(self, state: str, countdown_s: float = 0.0):
-        if self._state == state and state != "cooldown":
+        if self._state == state and state not in ("cooldown", "countdown", "capture"):
             return   # avoid unnecessary redraws when state hasn't changed
         self._state = state
         cfg = self._CFG[state]
@@ -84,8 +99,8 @@ class GestureWindowBar(QtWidgets.QFrame):
         self._icon_lbl.setStyleSheet(f"font-size: 15px; {color_css}")
         self._text_lbl.setText(cfg["text"])
         self._text_lbl.setStyleSheet(f"font-size: 13px; font-weight: bold; {color_css}")
-        if state == "cooldown":
-            self._cd_lbl.setText(f"{countdown_s:.1f}s")
+        if state in ("cooldown", "countdown", "capture"):
+            self._cd_lbl.setText(f"{int(countdown_s)}" if state == "countdown" else f"{countdown_s:.1f}s")
             self._cd_lbl.setStyleSheet(
                 f"font-size: 14px; font-family: Menlo, Consolas, 'DejaVu Sans Mono', 'Liberation Mono', monospace; font-weight: bold; {color_css}"
             )
@@ -102,6 +117,14 @@ class GestureWindowBar(QtWidgets.QFrame):
 
     def show_cooldown(self, secs: float):
         self._apply("cooldown", max(0.0, secs))
+        self.setVisible(True)
+
+    def show_countdown(self, n: int):
+        self._apply("countdown", n)
+        self.setVisible(True)
+
+    def show_capture(self, secs: float):
+        self._apply("capture", max(0.0, secs))
         self.setVisible(True)
 
     def hide_bar(self):

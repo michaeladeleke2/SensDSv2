@@ -122,3 +122,12 @@ def test_a_bundled_starter_model_is_used_first(monkeypatch):
         Path(bundled, f).write_text("x")
     monkeypatch.setattr(SM, "_bundled_dir", lambda: bundled)
     assert SM.find_starter() == bundled
+
+
+def test_the_model_sees_as_many_frames_as_a_collect_sample():
+    # The Collect tab records round(duration / 0.15) frames: a "3 s" sample is 20
+    assert T._frames_for(3.0) == 20 and T._MODEL_FRAMES == 20
+    cube = np.random.default_rng(0).normal(size=(30, 3, 128, 256))
+    a = np.asarray(T._frames_to_pil(list(cube), n_frames=20))
+    b = np.asarray(T._frames_to_pil(list(cube[-20:])))
+    assert np.array_equal(a, b)

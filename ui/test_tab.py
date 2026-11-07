@@ -31,11 +31,21 @@ _PRED_CACHE_FRAMES = 2     # frames to reuse before re-running inference
 # On MPS/CUDA the gap is shorter because inference is hardware-accelerated.
 _MIN_INFER_GAP_S = min_infer_gap_s()
 
-# Maze has its own (slower) inference rhythm so the student has time to
-# complete a full gesture before the model looks at the frames.
-_MAZE_INFER_EVERY    = 45   # ticks between maze inferences (~1.5 s at 30 fps)
-_MAZE_MIN_FRAMES     = 30   # need a full 3-second epoch (30 frames at 10 fps)
-_MAZE_CAPTURE_FRAMES = 50   # send last 50 frames; _frames_to_pil picks the last 30
+# The model is shown as many frames as the Collect tab records for a sample:
+# round(duration / 0.15), so a "3 s" sample is 20 frames (about 2 s of radar),
+# which is also what the starter model was trained on. Try a Gesture takes
+# that many for its duration; RoboSoccer and the Maze take 20.
+def _frames_for(duration_s: float) -> int:
+    return max(1, round(duration_s / 0.15))        # collect_tab.py
+
+
+_MODEL_FRAMES = _frames_for(3.0)   # 20
+
+# Maze: a countdown (3, 2, 1, GO!), then the next _MODEL_FRAMES frames are
+# captured and classified, the robot moves, and the next countdown starts, so
+# the gesture always falls inside the picture.
+_MAZE_COUNTDOWN_S = 3.0
+_FRAME_S = 0.1
 _BASE_SPEED = 2.0       # px per tick
 _PUSH_BURST = 20        # extra px spread across burst ticks
 _PUSH_BURST_TICKS = 10
@@ -179,7 +189,7 @@ def _apply_jet(normalized):
     return (np.stack([r, g, b], axis=-1) * 255).astype(np.uint8)
 
 
-def _frames_to_pil(frames, previous: bool = False):
+def _frames_to_pil(frames, previous: bool = False, n_frames: int | None = None):
     """
     Convert raw radar frames → the PIL spectrogram image the model is given.
 
@@ -192,6 +202,8 @@ def _frames_to_pil(frames, previous: bool = False):
 
     previous: draw it as SensDS did before the change note, for the starter
     model (core/previous_picture.py).
+    n_frames: how many of the last frames to draw (default EPOCH_FRAMES; the
+    Test tab passes _MODEL_FRAMES, a Collect sample of "3 s").
     """
     from PIL import Image
     from core.processing import EPOCH_FRAMES, epoch_spectrogram_db, image_rows
@@ -199,7 +211,7 @@ def _frames_to_pil(frames, previous: bool = False):
     if len(frames) < 10:
         return None
     try:
-        epoch  = list(frames)[-EPOCH_FRAMES:]
+        epoch  = list(frames)[-(n_frames or EPOCH_FRAMES):]
         stack  = np.stack([np.asarray(f) for f in epoch], axis=0)
         # Ensure (n_frame, n_ant, n_chirp, n_sample)
         if stack.ndim == 3:
@@ -378,10 +390,11 @@ class InferenceWorker(QtCore.QObject):
     error  = QtCore.pyqtSignal(str)
     done   = QtCore.pyqtSignal()
 
-    def __init__(self, frames, model, hf_processor, id2label, previous=False):
+    def __init__(self, frames, model, hf_processor, id2label, previous=False, n_frames=None):
         super().__init__()
         self._frames = frames
         self._previous = previous
+        self._n_frames = n_frames
         self._model = model
         self._hf_processor = hf_processor
         self._id2label = id2label
@@ -402,7 +415,7 @@ class InferenceWorker(QtCore.QObject):
                 )
                 return
 
-            img = _frames_to_pil(self._frames, self._previous)
+            img = _frames_to_pil(self._frames, self._previous, self._n_frames)
             if img is None:
                 self.error.emit("Not enough frames for inference.")
                 return
@@ -986,6 +999,8 @@ class MazeWidget(QtWidgets.QWidget):
                     dot_col = QtGui.QColor("#c0392b")
                 elif self._overlay == "reading":
                     dot_col = QtGui.QColor("#2980b9")
+                elif self._overlay == "countdown":
+                    dot_col = QtGui.QColor("#e67e22")
                 else:
                     dot_col = None
                 if dot_col:
@@ -1034,9 +1049,32 @@ class MazeWidget(QtWidgets.QWidget):
                 elif self._overlay == "reading":
                     bg_col = QtGui.QColor(41, 128, 185, 210)
                     line1, line2 = "🔵 Reading…", ""
+                elif self._overlay == "countdown":
+                    bg_col = QtGui.QColor(230, 126, 34, 235)
+                    line1, line2 = "Get ready", f"{int(self._overlay_secs)}"
                 else:
                     bg_col = None
                     line1 = line2 = ""
+
+                # The countdown and GO! big over the maze, so nobody misses the start
+                if self._overlay in ("countdown", "go"):
+                    big = f"{int(self._overlay_secs)}" if self._overlay == "countdown" else "GO!"
+                    bfnt = QtGui.QFont()
+                    bfnt.setPixelSize(max(28, min(96, grid_h // 3)))
+                    bfnt.setBold(True)
+                    path = QtGui.QPainterPath()
+                    path.setFillRule(QtCore.Qt.FillRule.WindingFill)
+                    fm = QtGui.QFontMetricsF(bfnt)
+                    tw = fm.horizontalAdvance(big)
+                    path.addText(ox + grid_w / 2 - tw / 2,
+                                 oy + grid_h / 2 + (fm.ascent() - fm.descent()) / 2, bfnt, big)
+                    p.setPen(QtGui.QPen(QtGui.QColor(255, 255, 255, 215), 6))
+                    p.setBrush(QtCore.Qt.BrushStyle.NoBrush)
+                    p.drawPath(path)
+                    p.setPen(QtCore.Qt.PenStyle.NoPen)
+                    p.setBrush(QtGui.QColor(230, 126, 34, 230) if self._overlay == "countdown"
+                               else QtGui.QColor(39, 174, 96, 230))
+                    p.drawPath(path)
 
                 if bg_col:
                     p.setBrush(bg_col)
@@ -1117,8 +1155,11 @@ class TestTab(QtWidgets.QWidget):
         self._rs_cooldown_ticks = 0
 
         self._maze_timer = None
-        self._maze_tick_count = 0
-        self._maze_cooldown_ticks = 0
+        self._maze_phase = ""            # "countdown" | "capture" | "reading" | ""
+        self._maze_phase_end = 0.0
+        self._maze_frames: list = []
+        self._capture_target = _MODEL_FRAMES
+        self._last_n_frames = _MODEL_FRAMES
         self._mazes_solved = 0
         # 0=Easy(4×5), 1=Medium(5×7), 2=Hard(7×9)
         self._maze_difficulty = 1
@@ -1161,6 +1202,12 @@ class TestTab(QtWidgets.QWidget):
         self._frame_buf.append(frame)
         if self._capturing:
             self._capture_frames.append(frame)
+            if len(self._capture_frames) >= self._capture_target:
+                self._capture_done()
+        if self._maze_phase == "capture":
+            self._maze_frames.append(frame)
+            if len(self._maze_frames) >= _MODEL_FRAMES:
+                self._maze_captured()
 
     def stop_all_games(self):
         """
@@ -1298,7 +1345,7 @@ class TestTab(QtWidgets.QWidget):
         layout.addWidget(HintCard([
             "🎯 Single Prediction: do a gesture, hit Capture, and the model tells you what it thinks!",
             "⚽ RoboSoccer mode: the model watches you continuously. Swipe to steer, push to speed up!",
-            "🌀 Maze Game: navigate through the maze using gestures. Swipe to turn, push to move forward!",
+            "🌀 Maze Game: wait for 3, 2, 1, GO! then do one gesture. Swipe to turn, push to move forward!",
             "📊 Confidence: a percentage showing how sure the model is. 90%+ means very confident!",
             "🔧 Confidence threshold: the robot only reacts if the model is at least this confident.",
             "📈 The bar chart shows every gesture's score. One tall bar means confident!",
@@ -1700,7 +1747,8 @@ class TestTab(QtWidgets.QWidget):
         if not frames:
             return
         try:
-            pil_img = _frames_to_pil(frames, self._previous_chk.isChecked())
+            pil_img = _frames_to_pil(frames, self._previous_chk.isChecked(),
+                                     self._last_n_frames or _MODEL_FRAMES)
             if pil_img is None:
                 return
             # PIL → numpy → QImage → QPixmap
@@ -1931,25 +1979,31 @@ class TestTab(QtWidgets.QWidget):
     # ── single prediction ─────────────────────────────────────────────────────
 
     def _start_capture(self):
+        # The next _frames_for(duration) frames, as the Collect tab records a
+        # sample of that duration, so the model sees what it was trained on
+        self._capture_target = _frames_for(self._duration.value())
         self._capture_frames = []
         self._capturing = True
         self._capture_btn.setEnabled(False)
         self._set_status("🔴 Capturing… do your gesture now!", "#c0392b")
         self.stream_needed.emit(True)   # start radar for this capture window
+        # If the radar stops sending, give up after three times the expected time
         QtCore.QTimer.singleShot(
-            int(self._duration.value() * 1000), self._capture_done
+            int(self._capture_target * _FRAME_S * 3000 + 2000), self._capture_done
         )
 
     def _capture_done(self):
+        if not self._capturing:
+            return
         self._capturing = False
         frames = list(self._capture_frames)
-        if len(frames) < 5:
+        if len(frames) < 10:
             self._capture_btn.setEnabled(True)
             self._set_status("⚠️ No radar frames. Is the radar connected?", "#c0392b")
             self.stream_needed.emit(False)   # abort — nothing to infer
             return
         self._set_status("🔍 Running inference…", "#e67e22")
-        self._run_inference(frames, mode="single")
+        self._run_inference(frames, mode="single", n_frames=len(frames))
 
     # ── robosoccer ────────────────────────────────────────────────────────────
 
@@ -2060,24 +2114,21 @@ class TestTab(QtWidgets.QWidget):
         self._field.set_robot(rx + dx, ry + dy, hdg)
         self._anim_steps -= 1
 
-    # ── maze (continuous) ─────────────────────────────────────────────────────
+    # ── maze (countdown, then capture) ────────────────────────────────────────
 
     def _start_maze(self):
         rows, cols = self._DIFFICULTY_SIZES[self._maze_difficulty]
         self._maze_widget.new_maze(rows, cols)
         self._update_facing_label()
-        self._maze_tick_count = 0
-        self._maze_cooldown_ticks = 0
         self._inference_running = False
         self._cache_probs = {}
         self._cache_remaining = 0
         self._last_infer_done = 0.0
         self._maze_start_btn.setVisible(False)
         self._maze_stop_btn.setVisible(True)
-        self._set_status("Maze running. Do a gesture to move!", "#8e44ad")
+        self._set_status("Maze running. Do your gesture when you see GO!", "#8e44ad")
         self.stream_needed.emit(True)    # start radar streaming for this game
-        self._gesture_bar.show_ready()   # start with the window open
-        self._maze_widget.set_overlay("go")  # show GO badge on the maze
+        self._maze_countdown()
         self._maze_timer = QtCore.QTimer(self)
         self._maze_timer.timeout.connect(self._on_maze_tick)
         self._maze_timer.start(_TICK_MS)
@@ -2086,6 +2137,8 @@ class TestTab(QtWidgets.QWidget):
         if self._maze_timer:
             self._maze_timer.stop()
             self._maze_timer = None
+        self._maze_phase = ""
+        self._maze_frames = []
         self._maze_start_btn.setVisible(True)
         self._maze_stop_btn.setVisible(False)
         self._gesture_bar.hide_bar()
@@ -2093,23 +2146,44 @@ class TestTab(QtWidgets.QWidget):
         self._set_status("Maze stopped. Press Start to try again!", "#555")
         self.stream_needed.emit(False)  # radar no longer needed
 
-    def _on_maze_tick(self):
-        self._maze_tick_count += 1
-        if self._maze_cooldown_ticks > 0:
-            self._maze_cooldown_ticks -= 1
-        if (self._maze_tick_count % _MAZE_INFER_EVERY == 0
-                and not self._inference_running
-                and self._maze_cooldown_ticks == 0
-                and (time.monotonic() - self._last_infer_done) >= _MIN_INFER_GAP_S):
-            # Use only the most recent frames so the window closely matches
-            # the gesture duration used when the model was trained (~3 s).
-            # Older frames in the buffer are pre-gesture idle and dilute the signal.
-            frames = list(self._frame_buf)[-_MAZE_CAPTURE_FRAMES:]
-            if len(frames) >= _MAZE_MIN_FRAMES:
-                self._run_inference(frames, mode="maze")
+    def _maze_countdown(self):
+        self._maze_phase = "countdown"
+        self._maze_phase_end = time.monotonic() + _MAZE_COUNTDOWN_S
+        self._on_maze_tick()
 
-        self._update_gesture_bar(self._maze_cooldown_ticks)
-        self._update_maze_overlay(self._maze_cooldown_ticks)
+    def _maze_captured(self):
+        frames = self._maze_frames[:_MODEL_FRAMES]
+        self._maze_phase = "reading"
+        self._maze_frames = []
+        self._on_maze_tick()
+        self._run_inference(frames, mode="maze", n_frames=_MODEL_FRAMES)
+        if not self._inference_running and self._maze_timer is not None:
+            self._maze_countdown()      # the model could not start; try the next move
+
+    def _on_maze_tick(self):
+        now = time.monotonic()
+        if self._maze_phase == "countdown":
+            left = self._maze_phase_end - now
+            if left > 0:
+                n = int(np.ceil(left))
+                self._gesture_bar.show_countdown(n)
+                self._maze_widget.set_overlay("countdown", n)
+                return
+            self._maze_phase = "capture"
+            self._maze_frames = []
+            # If the radar stops sending, give up after three times the expected time
+            self._maze_phase_end = now + _MODEL_FRAMES * _FRAME_S * 3 + 2
+        if self._maze_phase == "capture":
+            if now > self._maze_phase_end:
+                self._set_status("⚠️ No radar frames. Is the radar connected?", "#c0392b")
+                self._maze_countdown()
+                return
+            left = max(0, _MODEL_FRAMES - len(self._maze_frames)) * _FRAME_S
+            self._gesture_bar.show_capture(left)
+            self._maze_widget.set_overlay("go")
+        elif self._maze_phase == "reading":
+            self._gesture_bar.show_reading()
+            self._maze_widget.set_overlay("reading")
 
     def _maze_reset(self):
         if self._maze_timer and self._maze_timer.isActive():
@@ -2148,7 +2222,7 @@ class TestTab(QtWidgets.QWidget):
         Refresh the gesture window bar with the current pipeline state.
 
         cooldown_ticks — the active cooldown counter for this mode
-                         (self._rs_cooldown_ticks or self._maze_cooldown_ticks)
+                         (self._rs_cooldown_ticks)
         """
         if self._inference_running:
             self._gesture_bar.show_reading()
@@ -2180,7 +2254,7 @@ class TestTab(QtWidgets.QWidget):
 
     # ── inference ─────────────────────────────────────────────────────────────
 
-    def _run_inference(self, frames, mode):
+    def _run_inference(self, frames, mode, n_frames=_MODEL_FRAMES):
         if self._inference_running:
             return
         if self._model is None:
@@ -2193,17 +2267,18 @@ class TestTab(QtWidgets.QWidget):
         # ── prediction cache ──────────────────────────────────────────────────
         # For continuous modes (robosoccer, maze), reuse a recent high-confidence
         # result for up to _PRED_CACHE_FRAMES ticks to reduce CPU load.
-        if mode != "single" and self._cache_remaining > 0 and self._cache_probs:
+        if mode == "robosoccer" and self._cache_remaining > 0 and self._cache_probs:
             self._cache_remaining -= 1
             self._on_inference_result(self._cache_probs, mode, _from_cache=True)
             return
 
         self._last_frames = list(frames)   # remember for spectrogram preview
+        self._last_n_frames = n_frames
         self._inference_running = True
 
         worker = InferenceWorker(
             frames, self._model, self._hf_processor, self._id2label,
-            self._previous_chk.isChecked(),
+            self._previous_chk.isChecked(), n_frames,
         )
         thread = QtCore.QThread(self)
         worker.moveToThread(thread)
@@ -2258,7 +2333,10 @@ class TestTab(QtWidgets.QWidget):
             self._animate_single(best)
             self._confirm_widget.setVisible(True)
             self.gesture_tested.emit(best, conf)
-            self.stream_needed.emit(False)  # capture + inference done — stop radar
+            if mode == "single":
+                # One capture done — stop radar. RoboSoccer and the Maze keep
+                # it running until they stop.
+                self.stream_needed.emit(False)
 
         elif mode == "robosoccer":
             if conf >= threshold and best != "idle":
@@ -2288,8 +2366,6 @@ class TestTab(QtWidgets.QWidget):
                 # in history but doesn't skew the confusion matrix
                 self.prediction_made.emit(best, conf, maze_threshold, None, "Maze")
                 self._set_status(f"Listening… ({nice} {conf:.0%})", "#888")
-                self._maze_cooldown_ticks = 90   # ~3 s at 30 fps
-                self._frame_buf.clear()
                 self._cache_probs     = {}
                 self._cache_remaining = 0
             else:
@@ -2299,12 +2375,11 @@ class TestTab(QtWidgets.QWidget):
                 self._update_facing_label()
                 color = "#27ae60" if "wall" not in feedback.lower() else "#e74c3c"
                 self._set_status(f"{nice} ({conf:.0%})  ·  {feedback}", color)
-                # Cooldown so we don't re-classify immediately after a gesture
-                self._maze_cooldown_ticks = 90    # ~3 s at 30 fps
-                self._frame_buf.clear()           # discard stale frames so they can't re-fire
-                # Clear cache — same reason as robosoccer: don't re-fire after cooldown
                 self._cache_probs     = {}
                 self._cache_remaining = 0
+            # The next move starts with a countdown (a solved maze has stopped)
+            if self._maze_timer is not None:
+                self._maze_countdown()
 
     def _on_inference_error(self, msg, mode=None):
         self._inference_running = False
@@ -2315,6 +2390,8 @@ class TestTab(QtWidgets.QWidget):
         if current == "single" or current == self._MODE_SINGLE:
             self._capture_btn.setEnabled(True)
             self.stream_needed.emit(False)  # single capture failed — stop radar
+        if current == "maze" and self._maze_timer is not None:
+            self._maze_countdown()
         # maze and robosoccer are continuous — they keep running on their timer
 
     # ── difficulty picker ─────────────────────────────────────────────────────
