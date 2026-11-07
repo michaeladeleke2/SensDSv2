@@ -1221,6 +1221,7 @@ class TestTab(QtWidgets.QWidget):
             self._stop_maze()
         if self._capturing:
             self._capturing = False
+            self._capture_btn.setEnabled(self._model is not None)   # the capture was dropped
             self.stream_needed.emit(False)
 
     def refresh(self):

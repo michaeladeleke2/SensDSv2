@@ -149,17 +149,29 @@ def _apply_jet(normalized: np.ndarray) -> np.ndarray:
     return (np.stack([r, g, b], axis=-1) * 255).astype(np.uint8)
 
 
-def _frames_to_pil(frames: list):
+# The model is shown as many frames as the Collect tab records for a sample:
+# round(duration / 0.15), so a "3 s" sample is 20 frames (about 2 s of radar).
+# Single Command takes that many for its duration; RoboSoccer takes 20. The
+# Test tab does the same (ui/test_tab.py).
+def _frames_for(duration_s: float) -> int:
+    return max(1, round(duration_s / 0.15))        # collect_tab.py
+
+
+_MODEL_FRAMES = _frames_for(3.0)   # 20
+_FRAME_S = 0.1
+
+
+def _frames_to_pil(frames: list, n_frames: int = _MODEL_FRAMES):
     """
     Convert raw radar frames → the PIL spectrogram image the model is given.
-    Uses last EPOCH_FRAMES (30) frames matching the 3-second training window.
+    Uses the last n_frames frames (20, a Collect sample of "3 s").
     """
     from PIL import Image
     from core.processing import EPOCH_FRAMES, epoch_spectrogram_db, image_rows
     if len(frames) < 10:
         return None
     try:
-        epoch  = list(frames)[-EPOCH_FRAMES:]
+        epoch  = list(frames)[-n_frames:]
         stack  = np.stack([np.asarray(f) for f in epoch], axis=0)
         # Ensure (n_frame, n_ant, n_chirp, n_sample)
         if stack.ndim == 3:
@@ -228,9 +240,10 @@ class InferenceWorker(QtCore.QObject):
     error  = QtCore.pyqtSignal(str)
     done   = QtCore.pyqtSignal()
 
-    def __init__(self, frames, model, hf_processor, id2label):
+    def __init__(self, frames, model, hf_processor, id2label, n_frames=_MODEL_FRAMES):
         super().__init__()
         self._frames       = frames
+        self._n_frames     = n_frames
         self._model        = model
         self._hf_processor = hf_processor
         self._id2label     = id2label
@@ -249,7 +262,7 @@ class InferenceWorker(QtCore.QObject):
                 )
                 return
 
-            img = _frames_to_pil(self._frames)
+            img = _frames_to_pil(self._frames, self._n_frames)
             if img is None:
                 self.error.emit("Not enough radar frames. Connect the radar first.")
                 return
@@ -374,6 +387,7 @@ class VexAimTab(QtWidgets.QWidget):
         self._frame_buf: deque     = deque(maxlen=50)   # 5 s at 10 fps — holds >1 full epoch
         self._capturing            = False
         self._capture_frames: list = []
+        self._capture_target       = _MODEL_FRAMES
 
         self._inference_running = False
         self._infer_thread      = None
@@ -399,6 +413,8 @@ class VexAimTab(QtWidgets.QWidget):
         self._frame_buf.append(frame)
         if self._capturing:
             self._capture_frames.append(frame)
+            if len(self._capture_frames) >= self._capture_target:
+                self._single_capture_done()
 
     def on_spectrogram_frame(self, batch: np.ndarray):
         self._spectrogram.update_frame(batch)
@@ -784,24 +800,30 @@ class VexAimTab(QtWidgets.QWidget):
     # ── single command ────────────────────────────────────────────────────────
 
     def _start_single(self):
+        # The next _frames_for(duration) frames, as the Collect tab records a
+        # sample of that duration, so the model sees what it was trained on
+        self._capture_target = _frames_for(self._duration.value())
         self._capture_frames = []
         self._capturing      = True
         self._start_btn.setEnabled(False)
-        dur_ms = int(self._duration.value() * 1000)
-        self._log(f"Capturing for {self._duration.value():.1f} s…")
+        self._log(f"Capturing for {self._duration.value():.1f} s ({self._capture_target} frames)…")
         self.stream_needed.emit(True)   # start radar for this capture window
-        QtCore.QTimer.singleShot(dur_ms, self._single_capture_done)
+        # If the radar stops sending, give up after three times the expected time
+        QtCore.QTimer.singleShot(int(self._capture_target * _FRAME_S * 3000 + 2000),
+                                 self._single_capture_done)
 
     def _single_capture_done(self):
+        if not self._capturing:
+            return
         self._capturing = False
         frames = list(self._capture_frames)
-        if len(frames) < 5:
+        if len(frames) < 10:
             self._log("Too few frames. Connect the radar and try again.")
             self._refresh_start_btn()
             self.stream_needed.emit(False)   # abort — stop radar
             return
         self._log(f"Running inference on {len(frames)} frames…")
-        self._run_inference(frames, mode="single")
+        self._run_inference(frames, mode="single", n_frames=len(frames))
 
     # ── robosoccer ────────────────────────────────────────────────────────────
 
@@ -852,7 +874,7 @@ class VexAimTab(QtWidgets.QWidget):
 
     # ── inference ─────────────────────────────────────────────────────────────
 
-    def _run_inference(self, frames: list, mode: str):
+    def _run_inference(self, frames: list, mode: str, n_frames: int = _MODEL_FRAMES):
         if self._inference_running or self._model is None:
             return
 
@@ -867,7 +889,7 @@ class VexAimTab(QtWidgets.QWidget):
         self._inference_running = True
 
         worker = InferenceWorker(
-            frames, self._model, self._hf_processor, self._id2label
+            frames, self._model, self._hf_processor, self._id2label, n_frames
         )
         thread = QtCore.QThread(self)
         worker.moveToThread(thread)
