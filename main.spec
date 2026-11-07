@@ -107,6 +107,8 @@ hiddenimports += [
     # The range map scripts, imported inside methods (core/range_map.py)
     'core.range_map', 'core.range_map_v1', 'core.range_map_live',
     'core.curve_explain', 'ui.range_map_view',
+    # The starter model's previous spectrogram, imported inside _frames_to_pil
+    'core.previous_picture',
     'ifxradarsdk',
     'ifxradarsdk.fmcw',
     'ifxradarsdk.fmcw.types',

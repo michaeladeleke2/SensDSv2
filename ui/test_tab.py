@@ -179,7 +179,7 @@ def _apply_jet(normalized):
     return (np.stack([r, g, b], axis=-1) * 255).astype(np.uint8)
 
 
-def _frames_to_pil(frames):
+def _frames_to_pil(frames, previous: bool = False):
     """
     Convert raw radar frames → the PIL spectrogram image the model is given.
 
@@ -189,6 +189,9 @@ def _frames_to_pil(frames):
 
     Each frame must be shape (n_antenna, n_chirp, n_sample).
     Requires at least 10 frames; uses the last EPOCH_FRAMES (30) if more given.
+
+    previous: draw it as SensDS did before the change note, for the starter
+    model (core/previous_picture.py).
     """
     from PIL import Image
     from core.processing import EPOCH_FRAMES, epoch_spectrogram_db, image_rows
@@ -201,6 +204,10 @@ def _frames_to_pil(frames):
         # Ensure (n_frame, n_ant, n_chirp, n_sample)
         if stack.ndim == 3:
             stack = stack[:, np.newaxis]
+
+        if previous:
+            from core.previous_picture import previous_image
+            return previous_image(stack)
 
         from core.processing import METHOD_INFINEON, get_method
         if get_method() == METHOD_INFINEON:
@@ -371,9 +378,10 @@ class InferenceWorker(QtCore.QObject):
     error  = QtCore.pyqtSignal(str)
     done   = QtCore.pyqtSignal()
 
-    def __init__(self, frames, model, hf_processor, id2label):
+    def __init__(self, frames, model, hf_processor, id2label, previous=False):
         super().__init__()
         self._frames = frames
+        self._previous = previous
         self._model = model
         self._hf_processor = hf_processor
         self._id2label = id2label
@@ -394,7 +402,7 @@ class InferenceWorker(QtCore.QObject):
                 )
                 return
 
-            img = _frames_to_pil(self._frames)
+            img = _frames_to_pil(self._frames, self._previous)
             if img is None:
                 self.error.emit("Not enough frames for inference.")
                 return
@@ -1255,6 +1263,19 @@ class TestTab(QtWidgets.QWidget):
         cf.addWidget(self._classes_lbl)
         layout.addWidget(self._classes_frame)
 
+        # The starter model was trained on spectrograms drawn before the
+        # change note: on for the starter model, off for a student's own
+        self._previous_chk = QtWidgets.QCheckBox("Previous spectrogram (starter model)")
+        self._previous_chk.setToolTip(
+            "Show the model the spectrogram as SensDS drew it before the October\n"
+            "change (range bin, colour scale, and the speed range of the previous\n"
+            "0.2 ms chirp). The starter model was trained on that drawing, so it\n"
+            "is on for the starter model and off for your own models.\n\n"
+            "Only the picture the model sees changes; the radar settings and the\n"
+            "other tabs stay as they are.")
+        self._previous_chk.setStyleSheet("font-size: 12px;")
+        layout.addWidget(self._previous_chk)
+
         layout.addWidget(self._divider())
 
         # ── mode picker ──
@@ -1679,7 +1700,7 @@ class TestTab(QtWidgets.QWidget):
         if not frames:
             return
         try:
-            pil_img = _frames_to_pil(frames)
+            pil_img = _frames_to_pil(frames, self._previous_chk.isChecked())
             if pil_img is None:
                 return
             # PIL → numpy → QImage → QPixmap
@@ -1789,6 +1810,7 @@ class TestTab(QtWidgets.QWidget):
 
     def _on_starter_ready(self, folder):
         if self._starter_token == self._load_token:
+            self._previous_chk.setChecked(True)     # the starter model learned the previous drawing
             self._start_model_load(folder, SM.STARTER_NAME)
 
     def _on_starter_error(self, msg):
@@ -1803,6 +1825,8 @@ class TestTab(QtWidgets.QWidget):
         if not path:
             return
         self._load_token += 1           # a starter download still running is dropped
+        # a student's model learned the current drawing; the starter folder, the previous one
+        self._previous_chk.setChecked(os.path.realpath(path) == os.path.realpath(SM.STARTER_DIR))
         self._start_model_load(path)
 
     def _start_model_load(self, path, name=None):
@@ -2178,7 +2202,8 @@ class TestTab(QtWidgets.QWidget):
         self._inference_running = True
 
         worker = InferenceWorker(
-            frames, self._model, self._hf_processor, self._id2label
+            frames, self._model, self._hf_processor, self._id2label,
+            self._previous_chk.isChecked(),
         )
         thread = QtCore.QThread(self)
         worker.moveToThread(thread)
